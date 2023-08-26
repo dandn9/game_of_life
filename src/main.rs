@@ -3,12 +3,19 @@ use bevy::{
     sprite::{Material2d, MaterialMesh2dBundle, Mesh2dHandle},
 };
 
+const CELL_SIZE: u32 = 5;
+const TIME_STEP_SECS: f64 = 0.1;
+
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .add_systems(Startup, setup)
         .add_systems(PostStartup, seed) // commands need to be flushed
-        .add_systems(Update, (process_cells, update_colors.after(process_cells)))
+        .add_systems(
+            Update,
+            (process_cells, update_colors.after(process_cells))
+                .run_if(should_next_tick(TIME_STEP_SECS)),
+        )
         .run();
 }
 
@@ -33,10 +40,28 @@ struct StateMaterials {
     alive_material: Handle<ColorMaterial>,
     dead_material: Handle<ColorMaterial>,
 }
+#[derive(Resource, Debug, Clone)]
+struct Board {
+    rows: u32,
+    columns: u32,
+}
 
-#[derive(Resource)]
+#[derive(Resource, Debug, Clone)]
 struct LastUpdate(f64);
 
+// Decides if the `evolution` systems run
+fn should_next_tick(t: f64) -> impl FnMut(Local<f64>, Res<Time>) -> bool {
+    move |mut previous_tick: Local<f64>, time: Res<Time>| {
+        // Tick the timer
+        if time.elapsed_seconds_f64() - (*previous_tick) >= t {
+            *previous_tick = time.elapsed_seconds_f64();
+            true
+        } else {
+            false
+        }
+    }
+}
+// Logic to determine whether a cell should be alive in the next tick or not
 fn is_cell_alive(cell: &Cell, neighbours: [Option<&Cell>; 8]) -> bool {
     // https://en.wikipedia.org/wiki/Conway%27s_Game_of_Life#Rules
 
@@ -73,19 +98,8 @@ fn is_cell_alive(cell: &Cell, neighbours: [Option<&Cell>; 8]) -> bool {
     }
 }
 
-const TIME_STEP_SECS: f64 = 0.5;
-fn process_cells(
-    time: Res<Time>,
-    mut cells: Query<&mut Cell>,
-    entities_map: ResMut<EntityMap>,
-    mut last_update: ResMut<LastUpdate>,
-) {
-    if time.elapsed_seconds_f64() - last_update.0 >= TIME_STEP_SECS {
-        last_update.0 = time.elapsed_seconds_f64();
-    } else {
-        return;
-    }
-
+// Updates the next_state of the cells and after all the cells have been updated, state=next_state
+fn process_cells(mut cells: Query<&mut Cell>, entities_map: ResMut<EntityMap>) {
     for row_index in 0..entities_map.v.len() {
         let row = entities_map.v.get(row_index).unwrap();
         for col_index in 0..row.len() {
@@ -145,28 +159,22 @@ fn process_cells(
     }
 }
 
+// Seeds the state of the board (for now just a simple 50%)
 fn seed(mut query: Query<&mut Cell>) {
     for mut cell in query.iter_mut() {
-        println!(
-            "X POSITION {} Y POSITION {}",
-            cell.position.x, cell.position.y
-        );
-        if cell.position.x > 0.
-            && cell.position.x < 20.
-            && cell.position.y > 10.
-            && cell.position.y < 20.
-        {
-            cell.state = State::ALIVE;
+        let rand = rand::random::<f32>();
+
+        if rand >= 0.5 {
+            cell.state = State::ALIVE
         }
     }
 }
 
 fn update_colors(
-    mut commands: Commands,
-    mut query: Query<(Entity, &Cell, &mut Handle<ColorMaterial>)>,
+    mut query: Query<(&Cell, &mut Handle<ColorMaterial>)>,
     state_materials: Res<StateMaterials>,
 ) {
-    for (e, cell, mut material) in query.iter_mut() {
+    for (cell, mut material) in query.iter_mut() {
         match cell.state {
             State::ALIVE => {
                 *material = state_materials.alive_material.clone();
@@ -177,8 +185,6 @@ fn update_colors(
         }
     }
 }
-
-const CELL_SIZE: u32 = 20;
 
 fn setup(
     mut commands: Commands,
@@ -205,6 +211,7 @@ fn setup(
         dead_material: dead_material.clone(),
     });
     commands.insert_resource(LastUpdate(0.));
+    commands.insert_resource(Board { rows, columns });
 
     // keeps a 2x2 matrix of all the entities for faster indexing
     let mut entity_map = EntityMap { v: vec![] };
@@ -224,7 +231,7 @@ fn setup(
                     mesh: quad_mesh.clone().into(),
                     transform: Transform {
                         translation: Vec3::new(x_offset, y_offset, 1.0),
-                        scale: Vec3::splat((CELL_SIZE - 2) as f32),
+                        scale: Vec3::splat((CELL_SIZE) as f32),
                         ..Transform::default()
                     },
                     material: dead_material.clone(),
