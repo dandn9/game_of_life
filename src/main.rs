@@ -186,6 +186,7 @@ fn update_colors(
     }
 }
 
+// Creates the entities and resources
 fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
