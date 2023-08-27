@@ -4,3 +4,5 @@
 #### Resources:
 * https://en.wikipedia.org/wiki/Conway's_Game_of_Life 
 * https://bevyengine.org/
+
+Checkout the online version: [click me](https://game-of-life-gilt.vercel.app)
