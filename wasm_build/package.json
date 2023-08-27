@@ -1,0 +1,14 @@
+{
+  "name": "game_of_life_bevy",
+  "version": "0.1.0",
+  "files": [
+    "game_of_life_bevy_bg.wasm",
+    "game_of_life_bevy.js",
+    "game_of_life_bevy.d.ts"
+  ],
+  "module": "game_of_life_bevy.js",
+  "types": "game_of_life_bevy.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
