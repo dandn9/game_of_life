@@ -8,6 +8,43 @@ use bevy::{
 const CELL_SIZE: u32 = 5;
 const TIME_STEP_SECS: f64 = 0.1;
 
+////////////////////////////////////////////////////////////////////////
+/// COMPONENTS
+///////////////////////////////////////////////////////////////////////
+
+#[derive(Component, Debug, Copy, Clone)]
+enum State {
+    ALIVE,
+    DEAD,
+}
+#[derive(Component, Debug)]
+struct Cell {
+    state: State,
+    next_state: Option<State>,
+}
+
+#[derive(Component)]
+struct FPSCounter;
+
+////////////////////////////////////////////////////////////////////////
+/// RESOURCES
+///////////////////////////////////////////////////////////////////////
+#[derive(Resource, Debug)]
+struct EntityMap {
+    v: Vec<Vec<Entity>>,
+}
+
+#[derive(Resource)]
+struct StateMaterials {
+    alive_material: Handle<ColorMaterial>,
+    dead_material: Handle<ColorMaterial>,
+}
+
+#[derive(Resource, Debug, Clone)]
+struct LastUpdate(f64);
+
+////////////////////////////////////////////////////////////////////////
+
 pub fn main() {
     // console_log::init_with_level(Level::DEBUG);
     info!("TEST INFOO");
@@ -28,36 +65,28 @@ pub fn main() {
         .add_systems(PostStartup, seed) // commands need to be flushed
         .add_systems(
             Update,
-            (process_cells, update_colors.after(process_cells))
-                .run_if(should_next_tick(TIME_STEP_SECS)),
+            (
+                (process_cells, update_colors.after(process_cells))
+                    .run_if(should_next_tick(TIME_STEP_SECS)),
+                update_ui,
+            ),
         )
         .run();
 }
 
-#[derive(Component, Debug, Copy, Clone)]
-enum State {
-    ALIVE,
-    DEAD,
-}
-#[derive(Component, Debug)]
-struct Cell {
-    state: State,
-    next_state: Option<State>,
-    position: Vec2,
-}
-#[derive(Resource, Debug)]
-struct EntityMap {
-    v: Vec<Vec<Entity>>,
-}
+////////////////////////////////////////////////////////////////////////
+/// SYSTEMS
+///////////////////////////////////////////////////////////////////////
 
-#[derive(Resource)]
-struct StateMaterials {
-    alive_material: Handle<ColorMaterial>,
-    dead_material: Handle<ColorMaterial>,
-}
+fn update_ui(time: Res<Time>, mut counter: Query<&mut Text, With<FPSCounter>>) {
+    let delta_time = time.delta_seconds_f64();
+    let fps = (1. / delta_time) as i32;
 
-#[derive(Resource, Debug, Clone)]
-struct LastUpdate(f64);
+    let mut text = counter.single_mut();
+    if let Some(section) = text.sections.first_mut() {
+        section.value = fps.to_string();
+    }
+}
 
 // Decides if the `evolution` systems run
 fn should_next_tick(t: f64) -> impl FnMut(Local<f64>, Res<Time>) -> bool {
@@ -208,6 +237,13 @@ fn setup(
     let rows = (win.width() / CELL_SIZE as f32).floor() as u32;
     let columns = (win.height() / CELL_SIZE as f32).floor() as u32;
 
+    // text setup
+    let text_alignment = TextAlignment::Left;
+    let text_style = TextStyle {
+        font_size: 26.,
+        ..default()
+    };
+
     info!("{} {}", win.width(), win.height());
     // offset to center the cells inside the window
     let win_x_offset = win.width() % CELL_SIZE as f32;
@@ -262,10 +298,6 @@ fn setup(
                 .insert(Cell {
                     next_state: None,
                     state: State::DEAD,
-                    position: Vec2 {
-                        x: i as f32,
-                        y: j as f32,
-                    },
                 })
                 .id();
             let row = entity_map.v.get_mut(i as usize);
@@ -275,4 +307,22 @@ fn setup(
 
     // Add the entity map to the resources so they can be accessed by the update systems
     commands.insert_resource(entity_map);
+    // Add text
+
+    commands
+        .spawn(NodeBundle {
+            style: Style {
+                align_content: AlignContent::FlexStart,
+                align_items: AlignItems::Center,
+                flex_direction: FlexDirection::Row,
+                align_self: AlignSelf::Start,
+                ..default()
+            },
+            ..default()
+        })
+        .with_children(|parent| {
+            parent
+                .spawn(TextBundle::from_section("Hello World", text_style))
+                .insert(FPSCounter);
+        });
 }
