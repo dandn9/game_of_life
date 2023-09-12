@@ -68,23 +68,25 @@ pub fn main() {
             (
                 (process_cells, update_colors.after(process_cells))
                     .run_if(should_next_tick(TIME_STEP_SECS)),
-                update_ui,
+                (update_ui).run_if(should_update_counter(1.)), // Update the fps counter every 1 second
             ),
         )
         .run();
 }
 
 ////////////////////////////////////////////////////////////////////////
-/// SYSTEMS
-///////////////////////////////////////////////////////////////////////
+/// RUN CONDITIONS
+////////////////////////////////////////////////////////////////////////
 
-fn update_ui(time: Res<Time>, mut counter: Query<&mut Text, With<FPSCounter>>) {
-    let delta_time = time.delta_seconds_f64();
-    let fps = (1. / delta_time) as i32;
-
-    let mut text = counter.single_mut();
-    if let Some(section) = text.sections.first_mut() {
-        section.value = fps.to_string();
+fn should_update_counter(interval: f64) -> impl FnMut(Local<f64>, Res<Time>) -> bool {
+    move |mut prev_interval: Local<f64>, time: Res<Time>| {
+        if *prev_interval >= interval {
+            *prev_interval = 0.;
+            true
+        } else {
+            *prev_interval += time.delta_seconds_f64();
+            false
+        }
     }
 }
 
@@ -100,6 +102,20 @@ fn should_next_tick(t: f64) -> impl FnMut(Local<f64>, Res<Time>) -> bool {
         }
     }
 }
+////////////////////////////////////////////////////////////////////////
+/// SYSTEMS
+///////////////////////////////////////////////////////////////////////
+
+fn update_ui(time: Res<Time>, mut counter: Query<&mut Text, With<FPSCounter>>) {
+    let delta_time = time.delta_seconds_f64();
+    let fps = (1. / delta_time) as i32;
+
+    let mut text = counter.single_mut();
+    if let Some(section) = text.sections.first_mut() {
+        section.value = fps.to_string();
+    }
+}
+
 // Logic to determine whether a cell should be alive in the next tick or not
 fn is_cell_alive(cell: &Cell, neighbours: [Option<&Cell>; 8]) -> bool {
     // https://en.wikipedia.org/wiki/Conway%27s_Game_of_Life#Rules
@@ -209,18 +225,16 @@ fn seed(mut query: Query<&mut Cell>) {
     }
 }
 
-fn update_colors(
-    mut query: Query<(&Cell, &mut Handle<ColorMaterial>)>,
-    state_materials: Res<StateMaterials>,
-) {
-    info!("UPDATING COLORS");
-    for (cell, mut material) in query.iter_mut() {
+fn update_colors(mut query: Query<(&Cell, &mut Sprite)>, state_materials: Res<StateMaterials>) {
+    for (cell, mut sprite) in query.iter_mut() {
+        info!("UPDATING COLORS {:?}", cell);
         match cell.state {
             State::ALIVE => {
-                *material = state_materials.alive_material.clone();
+                sprite.color = Color::WHITE;
+                // *material = state_materials.alive_material.clone();
             }
             State::DEAD => {
-                *material = state_materials.dead_material.clone();
+                sprite.color = Color::BLACK;
             }
         }
     }
@@ -231,6 +245,7 @@ fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
+    asset_server: Res<AssetServer>,
     win_q: Query<&Window>,
 ) {
     let win = win_q.single();
@@ -284,15 +299,21 @@ fn setup(
                 - (CELL_SIZE / 2) as f32
                 - (win_y_offset / 2.);
 
+            // let entity_id = commands
             let entity_id = commands
-                .spawn(MaterialMesh2dBundle {
-                    mesh: quad_mesh.clone().into(),
-                    transform: Transform {
-                        translation: Vec3::new(x_offset, y_offset, 1.0),
-                        scale: Vec3::splat((CELL_SIZE) as f32),
-                        ..Transform::default()
+                .spawn(SpriteBundle {
+                    texture: asset_server.load("cells/alive_cell.png"),
+                    transform: Transform::from_translation(Vec3 {
+                        x: x_offset,
+                        y: y_offset,
+                        z: 1.,
+                    }),
+                    sprite: Sprite {
+                        custom_size: Some(Vec2::splat(CELL_SIZE as f32)),
+                        color: Color::BLACK,
+
+                        ..Default::default()
                     },
-                    material: dead_material.clone(),
                     ..default()
                 })
                 .insert(Cell {
@@ -322,7 +343,7 @@ fn setup(
         })
         .with_children(|parent| {
             parent
-                .spawn(TextBundle::from_section("Hello World", text_style))
+                .spawn(TextBundle::from_section("0", text_style))
                 .insert(FPSCounter);
         });
 }
