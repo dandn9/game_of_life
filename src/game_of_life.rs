@@ -227,7 +227,6 @@ fn seed(mut query: Query<&mut Cell>) {
 
 fn update_colors(mut query: Query<(&Cell, &mut Sprite)>, state_materials: Res<StateMaterials>) {
     for (cell, mut sprite) in query.iter_mut() {
-        info!("UPDATING COLORS {:?}", cell);
         match cell.state {
             State::ALIVE => {
                 sprite.color = Color::WHITE;
