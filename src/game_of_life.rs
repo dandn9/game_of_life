@@ -1,7 +1,7 @@
+use bevy::diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
 use bevy::{
     core_pipeline::clear_color::ClearColorConfig,
     prelude::*,
-    sprite::MaterialMesh2dBundle,
     window::{PresentMode, WindowResolution},
 };
 
@@ -34,12 +34,6 @@ struct EntityMap {
     v: Vec<Vec<Entity>>,
 }
 
-#[derive(Resource)]
-struct StateMaterials {
-    alive_material: Handle<ColorMaterial>,
-    dead_material: Handle<ColorMaterial>,
-}
-
 #[derive(Resource, Debug, Clone)]
 struct LastUpdate(f64);
 
@@ -50,17 +44,22 @@ pub fn main() {
     info!("TEST INFOO");
 
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                resolution: WindowResolution::default(),
-                present_mode: PresentMode::AutoNoVsync,
+        .add_plugins((
+            DefaultPlugins.set(WindowPlugin {
+                primary_window: Some(Window {
+                    resolution: WindowResolution::default(),
+                    present_mode: PresentMode::AutoNoVsync,
 
-                canvas: Some("#my-canvas".to_string()),
+                    canvas: Some("#my-canvas".to_string()),
+                    fit_canvas_to_parent: true,
 
+                    ..default()
+                }),
                 ..default()
             }),
-            ..default()
-        }))
+            FrameTimeDiagnosticsPlugin::default(),
+            LogDiagnosticsPlugin::default(),
+        ))
         .add_systems(Startup, setup)
         .add_systems(PostStartup, seed) // commands need to be flushed
         .add_systems(
@@ -225,12 +224,11 @@ fn seed(mut query: Query<&mut Cell>) {
     }
 }
 
-fn update_colors(mut query: Query<(&Cell, &mut Sprite)>, state_materials: Res<StateMaterials>) {
+fn update_colors(mut query: Query<(&Cell, &mut Sprite)>) {
     for (cell, mut sprite) in query.iter_mut() {
         match cell.state {
             State::ALIVE => {
                 sprite.color = Color::WHITE;
-                // *material = state_materials.alive_material.clone();
             }
             State::DEAD => {
                 sprite.color = Color::BLACK;
@@ -240,19 +238,12 @@ fn update_colors(mut query: Query<(&Cell, &mut Sprite)>, state_materials: Res<St
 }
 
 // Creates the entities and resources
-fn setup(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
-    asset_server: Res<AssetServer>,
-    win_q: Query<&Window>,
-) {
+fn setup(mut commands: Commands, asset_server: Res<AssetServer>, win_q: Query<&Window>) {
     let win = win_q.single();
     let rows = (win.width() / CELL_SIZE as f32).floor() as u32;
     let columns = (win.height() / CELL_SIZE as f32).floor() as u32;
 
     // text setup
-    let text_alignment = TextAlignment::Left;
     let text_style = TextStyle {
         font_size: 26.,
         ..default()
@@ -270,21 +261,8 @@ fn setup(
         ..default()
     });
 
-    let quad_mesh = meshes.add(Mesh::from(shape::Quad::default()));
-    let alive_material = materials.add(ColorMaterial::from(Color::Hsla {
-        hue: 240.,
-        saturation: 0.87,
-        lightness: 0.60,
-        alpha: 1.,
-    }));
-    let dead_material = materials.add(ColorMaterial::from(Color::BLACK));
-
-    commands.insert_resource(StateMaterials {
-        alive_material: alive_material.clone(),
-        dead_material: dead_material.clone(),
-    });
     commands.insert_resource(LastUpdate(0.));
-
+    let sprite_handle = asset_server.load("cells/alive_cell.png");
     // keeps a 2x2 matrix of all the entities for faster indexing
     let mut entity_map = EntityMap { v: vec![] };
 
@@ -301,16 +279,16 @@ fn setup(
             // let entity_id = commands
             let entity_id = commands
                 .spawn(SpriteBundle {
-                    texture: asset_server.load("cells/alive_cell.png"),
+                    texture: sprite_handle.clone(),
                     transform: Transform::from_translation(Vec3 {
                         x: x_offset,
                         y: y_offset,
                         z: 1.,
                     }),
+
                     sprite: Sprite {
                         custom_size: Some(Vec2::splat(CELL_SIZE as f32)),
                         color: Color::BLACK,
-
                         ..Default::default()
                     },
                     ..default()
@@ -327,8 +305,8 @@ fn setup(
 
     // Add the entity map to the resources so they can be accessed by the update systems
     commands.insert_resource(entity_map);
-    // Add text
 
+    // UI - Add Text for fps counter
     commands
         .spawn(NodeBundle {
             style: Style {
