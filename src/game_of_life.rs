@@ -1,12 +1,17 @@
 use bevy::diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
+use bevy::render::render_resource::TextureFormat;
 use bevy::{
     core_pipeline::clear_color::ClearColorConfig,
     prelude::*,
     window::{PresentMode, WindowResolution},
 };
+use rand::Rng;
 
 const CELL_SIZE: u32 = 5;
-const TIME_STEP_SECS: f64 = 0.1;
+const TIME_STEP_SECS: f64 = 0.5;
+
+const ALIVE_COLOR: [u8; 4] = [255, 0, 0, 255];
+const DEAD_COLOR: [u8; 4] = [10, 10, 10, 255];
 
 ////////////////////////////////////////////////////////////////////////
 /// COMPONENTS
@@ -17,22 +22,32 @@ enum State {
     ALIVE,
     DEAD,
 }
+
+impl State {
+    fn get_alive_color() -> [u8; 4] {
+        [255, 0, 0, 255]
+    }
+    fn cell_state(data: &[&u8; 4]) -> State {
+        // cells are red
+        if *data[0] == ALIVE_COLOR[0]
+            && *data[1] == ALIVE_COLOR[1]
+            && *data[2] == ALIVE_COLOR[2]
+            && *data[3] == ALIVE_COLOR[3]
+        {
+            State::ALIVE
+        } else {
+            State::DEAD
+        }
+    }
+}
+
 #[derive(Component, Debug)]
 struct Cell {
     state: State,
-    next_state: Option<State>,
 }
 
 #[derive(Component)]
 struct FPSCounter;
-
-////////////////////////////////////////////////////////////////////////
-/// RESOURCES
-///////////////////////////////////////////////////////////////////////
-#[derive(Resource, Debug)]
-struct EntityMap {
-    v: Vec<Vec<Entity>>,
-}
 
 #[derive(Resource, Debug, Clone)]
 struct LastUpdate(f64);
@@ -41,7 +56,6 @@ struct LastUpdate(f64);
 
 pub fn main() {
     // console_log::init_with_level(Level::DEBUG);
-    info!("TEST INFOO");
 
     App::new()
         .add_plugins((
@@ -65,8 +79,7 @@ pub fn main() {
         .add_systems(
             Update,
             (
-                (process_cells, update_colors.after(process_cells))
-                    .run_if(should_next_tick(TIME_STEP_SECS)),
+                (process_cells).run_if(should_next_tick(TIME_STEP_SECS)),
                 (update_ui).run_if(should_update_counter(1.)), // Update the fps counter every 1 second
             ),
         )
@@ -115,144 +128,161 @@ fn update_ui(time: Res<Time>, mut counter: Query<&mut Text, With<FPSCounter>>) {
     }
 }
 
-// Logic to determine whether a cell should be alive in the next tick or not
-fn is_cell_alive(cell: &Cell, neighbours: [Option<&Cell>; 8]) -> bool {
+trait Pixel {
+    fn get_pixel(&self, x: i32, y: i32) -> Option<[&u8; 4]>;
+}
+impl Pixel for Image {
+    fn get_pixel(&self, x: i32, y: i32) -> Option<[&u8; 4]> {
+        let size = self.size();
+
+        if x > size.x as i32 || x < 0 as i32 || y > size.y as i32 || y < 0 {
+            return None;
+        }
+        let r = &self.data[(y * size.x as i32 + x + 0) as usize];
+        let g = &self.data[(y * size.x as i32 + x + 1) as usize];
+        let b = &self.data[(y * size.x as i32 + x + 2) as usize];
+        let a = &self.data[(y * size.x as i32 + x + 3) as usize];
+
+        return Some([r, g, b, a]);
+    }
+}
+
+// Looks at a cell at a pixel in the image and determines if it's alive
+fn cell_state(image: &Image, x: i32, y: i32) -> State {
     // https://en.wikipedia.org/wiki/Conway%27s_Game_of_Life#Rules
 
     let mut neighbours_alive = 0;
 
-    for neighbour in neighbours {
-        match neighbour {
-            Some(neighbour_cell) => match (*neighbour_cell).state {
-                State::ALIVE => neighbours_alive += 1,
-                State::DEAD => {}
-            },
-            None => {}
+    // neighbours x
+    for n_x in -1..=1 {
+        // neighbors y
+        for n_y in -1..=1 {
+            // if its the center one (the cell we're determining)
+            if n_x == 0 && n_y == 0 {
+                continue;
+            }
+
+            let n = image.get_pixel(x + n_x, y + n_y);
+            if let Some(n_cell) = n {
+                match State::cell_state(&n_cell) {
+                    State::ALIVE => neighbours_alive += 1,
+                    State::DEAD => {}
+                }
+            }
         }
     }
 
-    match (*cell).state {
+    let cell_state = State::cell_state(&image.get_pixel(x, y).unwrap());
+
+    match cell_state {
         State::ALIVE => {
             if neighbours_alive < 2 {
-                return false;
+                return State::DEAD;
             }
             if neighbours_alive == 2 || neighbours_alive == 3 {
-                return true;
+                return State::ALIVE;
             } else {
-                return false;
+                return State::DEAD;
             };
         }
         State::DEAD => {
             if neighbours_alive == 3 {
-                return true;
+                return State::ALIVE;
             } else {
-                return false;
+                return State::DEAD;
             }
         }
     }
 }
 
 // Updates the next_state of the cells and after all the cells have been updated, state=next_state
-fn process_cells(mut cells: Query<&mut Cell>, entities_map: ResMut<EntityMap>) {
-    for row_index in 0..entities_map.v.len() {
-        let row = entities_map.v.get(row_index).unwrap();
-        for col_index in 0..row.len() {
-            let entity = row.get(col_index).unwrap().clone();
+fn process_cells(
+    mut images: ResMut<Assets<Image>>,
+    board_handle: Res<BoardHandle>,
+    board_size: Res<BoardSize>,
+) {
+    let h = &board_handle.0;
 
-            // Get the neighbours
-            let prev_row = entities_map.v.get((row_index as i32 - 1) as usize);
-            let next_row = entities_map.v.get(row_index + 1);
+    if let Some(board) = images.get_mut(h) {
+        let mut new_state = board.data.clone();
 
-            let neighbors0 = prev_row.and_then(|f| {
-                f.get((col_index as i32 - 1) as usize)
-                    .and_then(|f| cells.get(f.clone()).ok())
-            });
-            let neighbors1 =
-                prev_row.and_then(|f| f.get(col_index + 0).and_then(|f| cells.get(f.clone()).ok()));
-            let neighbors2 =
-                prev_row.and_then(|f| f.get(col_index + 1).and_then(|f| cells.get(f.clone()).ok()));
+        for i in 0..(board.data.len() / 4) {
+            // component
+            let c = i * 4;
 
-            let neighbors3 = row
-                .get((col_index as i32 - 1) as usize)
-                .and_then(|f| cells.get(f.clone()).ok());
-            let neighbors5 = row
-                .get(col_index + 1)
-                .and_then(|f| cells.get(f.clone()).ok());
+            let y = (i as f32 / board_size.rows as f32).floor() as i32;
+            let x = i as i32 - y * board_size.rows as i32;
 
-            let neighbors6 = next_row.and_then(|f| {
-                f.get((col_index as i32 - 1) as usize)
-                    .and_then(|f| cells.get(f.clone()).ok())
-            });
-            let neighbors7 =
-                next_row.and_then(|f| f.get(col_index + 0).and_then(|f| cells.get(f.clone()).ok()));
-            let neighbors8 =
-                next_row.and_then(|f| f.get(col_index + 1).and_then(|f| cells.get(f.clone()).ok()));
-
-            let cell = cells.get(entity).ok().unwrap();
-            let is_alive = is_cell_alive(
-                &cell,
-                [
-                    neighbors0, neighbors1, neighbors2, neighbors3, neighbors5, neighbors6,
-                    neighbors7, neighbors8,
-                ],
-            );
-
-            // mutate the cell after all the immutable references  ~_~
-            let mut mutable_cell = cells.get_mut(entity).ok().unwrap();
-            if is_alive {
-                mutable_cell.next_state = Some(State::ALIVE)
-            } else {
-                mutable_cell.next_state = Some(State::DEAD)
+            let new_cell_state = cell_state(&board, x, y);
+            match new_cell_state {
+                State::ALIVE => {
+                    new_state[c + 0] = ALIVE_COLOR[0];
+                    new_state[c + 1] = ALIVE_COLOR[1];
+                    new_state[c + 2] = ALIVE_COLOR[2];
+                    new_state[c + 3] = ALIVE_COLOR[3];
+                }
+                State::DEAD => {
+                    new_state[c + 0] = DEAD_COLOR[0];
+                    new_state[c + 1] = DEAD_COLOR[1];
+                    new_state[c + 2] = DEAD_COLOR[2];
+                    new_state[c + 3] = DEAD_COLOR[3];
+                }
             }
         }
-    }
-
-    // re loop all the cells to update the next_state
-    for mut cell in cells.iter_mut() {
-        cell.state = cell.next_state.unwrap();
-    }
+        board.data = new_state;
+    };
 }
 
 // Seeds the state of the board (for now just a simple 50%)
-fn seed(mut query: Query<&mut Cell>) {
-    for mut cell in query.iter_mut() {
-        let rand = rand::random::<f32>();
+fn seed(mut images: ResMut<Assets<Image>>, board_handle: Res<BoardHandle>) {
+    let h = &board_handle.0;
 
-        if rand >= 0.8 {
-            cell.state = State::ALIVE
-        }
-    }
-}
+    let mut rng = rand::thread_rng();
 
-fn update_colors(mut query: Query<(&Cell, &mut Sprite)>) {
-    for (cell, mut sprite) in query.iter_mut() {
-        match cell.state {
-            State::ALIVE => {
-                sprite.color = Color::WHITE;
-            }
-            State::DEAD => {
-                sprite.color = Color::BLACK;
+    if let Some(board) = images.get_mut(h) {
+        for i in 0..(board.data.len() / 4) {
+            let rand: f32 = rng.gen();
+            if rand >= 0.1 {
+                board.data[i * 4 + 0] = ALIVE_COLOR[0];
+                board.data[i * 4 + 1] = ALIVE_COLOR[1];
+                board.data[i * 4 + 2] = ALIVE_COLOR[2];
+                board.data[i * 4 + 3] = ALIVE_COLOR[3];
             }
         }
     }
 }
 
+#[derive(Resource)]
+struct BoardHandle(Handle<Image>);
+#[derive(Resource)]
+struct BoardSize {
+    rows: u32,
+    columns: u32,
+}
 // Creates the entities and resources
-fn setup(mut commands: Commands, asset_server: Res<AssetServer>, win_q: Query<&Window>) {
+fn setup(mut commands: Commands, win_q: Query<&Window>, mut images: ResMut<Assets<Image>>) {
     let win = win_q.single();
     let rows = (win.width() / CELL_SIZE as f32).floor() as u32;
     let columns = (win.height() / CELL_SIZE as f32).floor() as u32;
 
+    let board = Image::new_fill(
+        bevy::render::render_resource::Extent3d {
+            width: rows,
+            height: columns,
+            depth_or_array_layers: 1,
+        },
+        bevy::render::render_resource::TextureDimension::D2,
+        &[50, 50, 50, 255],
+        TextureFormat::Rgba8Unorm,
+    );
     // text setup
     let text_style = TextStyle {
         font_size: 26.,
         ..default()
     };
-
-    info!("{} {}", win.width(), win.height());
-    // offset to center the cells inside the window
-    let win_x_offset = win.width() % CELL_SIZE as f32;
-    let win_y_offset = win.width() % CELL_SIZE as f32;
+    let image = images.add(board);
+    commands.insert_resource(BoardHandle(image.clone()));
+    commands.insert_resource(BoardSize { rows, columns });
 
     commands.spawn(Camera2dBundle {
         camera_2d: Camera2d {
@@ -262,49 +292,16 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, win_q: Query<&W
     });
 
     commands.insert_resource(LastUpdate(0.));
-    let sprite_handle = asset_server.load("cells/alive_cell.png");
     // keeps a 2x2 matrix of all the entities for faster indexing
-    let mut entity_map = EntityMap { v: vec![] };
 
-    for i in 0..rows {
-        entity_map.v.push(vec![]);
-        for j in 0..columns {
-            let x_offset = (i * CELL_SIZE) as f32 - (win.width() / 2.0).round()
-                + (CELL_SIZE / 2) as f32
-                + (win_x_offset / 2.);
-            let y_offset = (j * CELL_SIZE) as f32 * -1. + (win.height() / 2.0).round()
-                - (CELL_SIZE / 2) as f32
-                - (win_y_offset / 2.);
-
-            // let entity_id = commands
-            let entity_id = commands
-                .spawn(SpriteBundle {
-                    texture: sprite_handle.clone(),
-                    transform: Transform::from_translation(Vec3 {
-                        x: x_offset,
-                        y: y_offset,
-                        z: 1.,
-                    }),
-
-                    sprite: Sprite {
-                        custom_size: Some(Vec2::splat(CELL_SIZE as f32)),
-                        color: Color::BLACK,
-                        ..Default::default()
-                    },
-                    ..default()
-                })
-                .insert(Cell {
-                    next_state: None,
-                    state: State::DEAD,
-                })
-                .id();
-            let row = entity_map.v.get_mut(i as usize);
-            row.unwrap().push(entity_id);
-        }
-    }
-
-    // Add the entity map to the resources so they can be accessed by the update systems
-    commands.insert_resource(entity_map);
+    commands.spawn(SpriteBundle {
+        sprite: Sprite {
+            // custom_size: Some(Vec2::new(win.width() as f32, win.height() as f32)),
+            ..default()
+        },
+        texture: image.clone(),
+        ..default()
+    });
 
     // UI - Add Text for fps counter
     commands
