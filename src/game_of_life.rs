@@ -8,7 +8,7 @@ use bevy::{
 use rand::Rng;
 
 const CELL_SIZE: u32 = 5;
-const TIME_STEP_SECS: f64 = 0.5;
+const TIME_STEP_SECS: f64 = 0.1;
 
 const ALIVE_COLOR: [u8; 4] = [255, 0, 0, 255];
 const DEAD_COLOR: [u8; 4] = [10, 10, 10, 255];
@@ -24,9 +24,6 @@ enum State {
 }
 
 impl State {
-    fn get_alive_color() -> [u8; 4] {
-        [255, 0, 0, 255]
-    }
     fn cell_state(data: &[&u8; 4]) -> State {
         // cells are red
         if *data[0] == ALIVE_COLOR[0]
@@ -39,11 +36,6 @@ impl State {
             State::DEAD
         }
     }
-}
-
-#[derive(Component, Debug)]
-struct Cell {
-    state: State,
 }
 
 #[derive(Component)]
@@ -59,18 +51,20 @@ pub fn main() {
 
     App::new()
         .add_plugins((
-            DefaultPlugins.set(WindowPlugin {
-                primary_window: Some(Window {
-                    resolution: WindowResolution::default(),
-                    present_mode: PresentMode::AutoNoVsync,
+            DefaultPlugins
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        resolution: WindowResolution::default(),
+                        present_mode: PresentMode::AutoNoVsync,
 
-                    canvas: Some("#my-canvas".to_string()),
-                    fit_canvas_to_parent: true,
+                        canvas: Some("#my-canvas".to_string()),
+                        fit_canvas_to_parent: true,
 
+                        ..default()
+                    }),
                     ..default()
-                }),
-                ..default()
-            }),
+                })
+                .set(ImagePlugin::default_nearest()),
             FrameTimeDiagnosticsPlugin::default(),
             LogDiagnosticsPlugin::default(),
         ))
@@ -135,13 +129,16 @@ impl Pixel for Image {
     fn get_pixel(&self, x: i32, y: i32) -> Option<[&u8; 4]> {
         let size = self.size();
 
-        if x > size.x as i32 || x < 0 as i32 || y > size.y as i32 || y < 0 {
+        if x >= size.x as i32 || x < 0 as i32 || y >= size.y as i32 || y < 0 {
             return None;
         }
-        let r = &self.data[(y * size.x as i32 + x + 0) as usize];
-        let g = &self.data[(y * size.x as i32 + x + 1) as usize];
-        let b = &self.data[(y * size.x as i32 + x + 2) as usize];
-        let a = &self.data[(y * size.x as i32 + x + 3) as usize];
+
+        let pos = (y * size.x as i32 + x) * 4;
+
+        let r = &self.data[(pos + 0) as usize];
+        let g = &self.data[(pos + 1) as usize];
+        let b = &self.data[(pos + 2) as usize];
+        let a = &self.data[(pos + 3) as usize];
 
         return Some([r, g, b, a]);
     }
@@ -200,12 +197,15 @@ fn process_cells(
     mut images: ResMut<Assets<Image>>,
     board_handle: Res<BoardHandle>,
     board_size: Res<BoardSize>,
+    mut next_state: Local<Vec<u8>>,
 ) {
     let h = &board_handle.0;
 
     if let Some(board) = images.get_mut(h) {
-        let mut new_state = board.data.clone();
-
+        if next_state.len() != board.data.len() {
+            // Initialize the buffer containing the next state
+            *next_state = board.data.clone();
+        }
         for i in 0..(board.data.len() / 4) {
             // component
             let c = i * 4;
@@ -216,20 +216,20 @@ fn process_cells(
             let new_cell_state = cell_state(&board, x, y);
             match new_cell_state {
                 State::ALIVE => {
-                    new_state[c + 0] = ALIVE_COLOR[0];
-                    new_state[c + 1] = ALIVE_COLOR[1];
-                    new_state[c + 2] = ALIVE_COLOR[2];
-                    new_state[c + 3] = ALIVE_COLOR[3];
+                    next_state[c + 0] = ALIVE_COLOR[0];
+                    next_state[c + 1] = ALIVE_COLOR[1];
+                    next_state[c + 2] = ALIVE_COLOR[2];
+                    next_state[c + 3] = ALIVE_COLOR[3];
                 }
                 State::DEAD => {
-                    new_state[c + 0] = DEAD_COLOR[0];
-                    new_state[c + 1] = DEAD_COLOR[1];
-                    new_state[c + 2] = DEAD_COLOR[2];
-                    new_state[c + 3] = DEAD_COLOR[3];
+                    next_state[c + 0] = DEAD_COLOR[0];
+                    next_state[c + 1] = DEAD_COLOR[1];
+                    next_state[c + 2] = DEAD_COLOR[2];
+                    next_state[c + 3] = DEAD_COLOR[3];
                 }
             }
         }
-        board.data = new_state;
+        board.data = next_state.clone();
     };
 }
 
@@ -242,7 +242,7 @@ fn seed(mut images: ResMut<Assets<Image>>, board_handle: Res<BoardHandle>) {
     if let Some(board) = images.get_mut(h) {
         for i in 0..(board.data.len() / 4) {
             let rand: f32 = rng.gen();
-            if rand >= 0.1 {
+            if rand >= 0.5 {
                 board.data[i * 4 + 0] = ALIVE_COLOR[0];
                 board.data[i * 4 + 1] = ALIVE_COLOR[1];
                 board.data[i * 4 + 2] = ALIVE_COLOR[2];
@@ -272,7 +272,7 @@ fn setup(mut commands: Commands, win_q: Query<&Window>, mut images: ResMut<Asset
             depth_or_array_layers: 1,
         },
         bevy::render::render_resource::TextureDimension::D2,
-        &[50, 50, 50, 255],
+        &(DEAD_COLOR.clone()),
         TextureFormat::Rgba8Unorm,
     );
     // text setup
@@ -296,7 +296,8 @@ fn setup(mut commands: Commands, win_q: Query<&Window>, mut images: ResMut<Asset
 
     commands.spawn(SpriteBundle {
         sprite: Sprite {
-            // custom_size: Some(Vec2::new(win.width() as f32, win.height() as f32)),
+            custom_size: Some(Vec2::new(win.width() as f32, win.height() as f32)),
+
             ..default()
         },
         texture: image.clone(),

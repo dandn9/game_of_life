@@ -294,7 +294,6 @@ version = "0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "18e71a9143ac21bed247c30129399af8be170309e7ff5983a1bd37e87d3da520"
 dependencies = [
- "bevy_dylib",
  "bevy_internal",
 ]
 
@@ -1592,6 +1591,7 @@ name = "game_of_life_bevy"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "bevy_dylib",
  "console_log",
  "rand",
  "wasm-bindgen",

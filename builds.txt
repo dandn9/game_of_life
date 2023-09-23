@@ -1,1 +1,3 @@
 wasm-pack build --target web -d wasm_build --debug
+
+cargo run --features bevy/dynamic_linking
