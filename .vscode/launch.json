@@ -9,7 +9,12 @@
 			"request": "launch",
 			"name": "Debug executable 'main'",
 			"cargo": {
-				"args": ["build", "--bin=main", "--package=game_of_life_bevy"],
+				"args": [
+					"build",
+					// "--config OPT-LEVEL=0",
+					"--bin=main",
+					"--package=game_of_life_bevy"
+				],
 				"filter": {
 					"name": "main",
 					"kind": "bin"

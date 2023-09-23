@@ -1,5 +1,7 @@
 use bevy::diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
+use bevy::input::mouse::MouseButtonInput;
 use bevy::render::render_resource::TextureFormat;
+use bevy::window::{PrimaryWindow, WindowResized};
 use bevy::{
     core_pipeline::clear_color::ClearColorConfig,
     prelude::*,
@@ -7,48 +9,46 @@ use bevy::{
 };
 use rand::Rng;
 
-const CELL_SIZE: u32 = 5;
+const CELL_SIZE: u32 = 4;
 const TIME_STEP_SECS: f64 = 0.1;
-
-const ALIVE_COLOR: [u8; 4] = [255, 0, 0, 255];
-const DEAD_COLOR: [u8; 4] = [10, 10, 10, 255];
+const ALIVE_COLOR: [u8; 4] = [63, 189, 238, 255];
+const DEAD_COLOR: [u8; 4] = [0, 0, 0, 255];
 
 ////////////////////////////////////////////////////////////////////////
 /// COMPONENTS
-///////////////////////////////////////////////////////////////////////
-
+////////////////////////////////////////////////////////////////////////
 #[derive(Component, Debug, Copy, Clone)]
 enum State {
     ALIVE,
     DEAD,
 }
-
-impl State {
-    fn cell_state(data: &[&u8; 4]) -> State {
-        // cells are red
-        if *data[0] == ALIVE_COLOR[0]
-            && *data[1] == ALIVE_COLOR[1]
-            && *data[2] == ALIVE_COLOR[2]
-            && *data[3] == ALIVE_COLOR[3]
-        {
-            State::ALIVE
-        } else {
-            State::DEAD
-        }
-    }
-}
-
 #[derive(Component)]
 struct FPSCounter;
+#[derive(Component)]
+struct Board;
 
+////////////////////////////////////////////////////////////////////////
+/// RESOURCES
+////////////////////////////////////////////////////////////////////////
+#[derive(Resource)]
+struct Brush {
+    size: u8,
+}
+#[derive(Resource)]
+struct BoardHandle(Handle<Image>);
+#[derive(Resource, Debug)]
+struct BoardSize {
+    rows: u32,
+    columns: u32,
+}
 #[derive(Resource, Debug, Clone)]
 struct LastUpdate(f64);
 
 ////////////////////////////////////////////////////////////////////////
+/// MAIN
+////////////////////////////////////////////////////////////////////////
 
 pub fn main() {
-    // console_log::init_with_level(Level::DEBUG);
-
     App::new()
         .add_plugins((
             DefaultPlugins
@@ -59,7 +59,7 @@ pub fn main() {
 
                         canvas: Some("#my-canvas".to_string()),
                         fit_canvas_to_parent: true,
-
+                        title: String::from("Conway's game of life"),
                         ..default()
                     }),
                     ..default()
@@ -75,6 +75,7 @@ pub fn main() {
             (
                 (process_cells).run_if(should_next_tick(TIME_STEP_SECS)),
                 (update_ui).run_if(should_update_counter(1.)), // Update the fps counter every 1 second
+                (handle_events),
             ),
         )
         .run();
@@ -112,6 +113,71 @@ fn should_next_tick(t: f64) -> impl FnMut(Local<f64>, Res<Time>) -> bool {
 /// SYSTEMS
 ///////////////////////////////////////////////////////////////////////
 
+// Creates the entities and resources
+fn setup(mut commands: Commands, q_win: Query<&Window>, mut images: ResMut<Assets<Image>>) {
+    let win = q_win.single();
+    let rows = (win.width() / CELL_SIZE as f32).floor() as u32;
+    let columns = (win.height() / CELL_SIZE as f32).floor() as u32;
+    let board = Image::new_fill(
+        bevy::render::render_resource::Extent3d {
+            width: rows,
+            height: columns,
+            depth_or_array_layers: 1,
+        },
+        bevy::render::render_resource::TextureDimension::D2,
+        &(DEAD_COLOR.clone()),
+        TextureFormat::Rgba8Unorm,
+    );
+    // text setup
+    let text_style = TextStyle {
+        font_size: 26.,
+        ..default()
+    };
+    let image = images.add(board);
+
+    // Initialize resources
+    commands.insert_resource(BoardHandle(image.clone()));
+    commands.insert_resource(BoardSize { rows, columns });
+    commands.insert_resource(Brush { size: 1 });
+    commands.insert_resource(LastUpdate(0.));
+
+    commands.spawn(Camera2dBundle {
+        camera_2d: Camera2d {
+            clear_color: ClearColorConfig::Custom(Color::BLACK),
+        },
+        ..default()
+    });
+
+    commands
+        .spawn(SpriteBundle {
+            sprite: Sprite {
+                custom_size: Some(Vec2::new(win.width() as f32, win.height() as f32)),
+
+                ..default()
+            },
+            texture: image.clone(),
+            ..default()
+        })
+        .insert(Board);
+
+    // UI - Add Text for fps counter
+    commands
+        .spawn(NodeBundle {
+            style: Style {
+                align_content: AlignContent::FlexStart,
+                align_items: AlignItems::Center,
+                flex_direction: FlexDirection::Row,
+                align_self: AlignSelf::Start,
+                ..default()
+            },
+            ..default()
+        })
+        .with_children(|parent| {
+            parent
+                .spawn(TextBundle::from_section("0", text_style))
+                .insert(FPSCounter);
+        });
+}
 fn update_ui(time: Res<Time>, mut counter: Query<&mut Text, With<FPSCounter>>) {
     let delta_time = time.delta_seconds_f64();
     let fps = (1. / delta_time) as i32;
@@ -122,28 +188,116 @@ fn update_ui(time: Res<Time>, mut counter: Query<&mut Text, With<FPSCounter>>) {
     }
 }
 
-trait Pixel {
-    fn get_pixel(&self, x: i32, y: i32) -> Option<[&u8; 4]>;
-}
-impl Pixel for Image {
-    fn get_pixel(&self, x: i32, y: i32) -> Option<[&u8; 4]> {
-        let size = self.size();
+// Updates the next_state of the cells and after all the cells have been updated, state=next_state
+fn process_cells(
+    mut images: ResMut<Assets<Image>>,
+    board_handle: Res<BoardHandle>,
+    board_size: Res<BoardSize>,
+    mut next_state: Local<Vec<u8>>,
+) {
+    let h = &board_handle.0;
 
-        if x >= size.x as i32 || x < 0 as i32 || y >= size.y as i32 || y < 0 {
-            return None;
+    if let Some(board) = images.get_mut(h) {
+        if next_state.len() != board.data.len() {
+            // Initialize the buffer containing the next state
+            *next_state = board.data.clone();
         }
+        for i in 0..(board.data.len() / 4) {
+            // component
+            let c = i * 4;
 
-        let pos = (y * size.x as i32 + x) * 4;
+            let y = (i as f32 / board_size.rows as f32).floor() as i32;
+            let x = i as i32 - y * board_size.rows as i32;
 
-        let r = &self.data[(pos + 0) as usize];
-        let g = &self.data[(pos + 1) as usize];
-        let b = &self.data[(pos + 2) as usize];
-        let a = &self.data[(pos + 3) as usize];
+            let new_cell_state = cell_state(&board, x, y);
+            match new_cell_state {
+                State::ALIVE => {
+                    next_state[c + 0] = ALIVE_COLOR[0];
+                    next_state[c + 1] = ALIVE_COLOR[1];
+                    next_state[c + 2] = ALIVE_COLOR[2];
+                    next_state[c + 3] = ALIVE_COLOR[3];
+                }
+                State::DEAD => {
+                    next_state[c + 0] = DEAD_COLOR[0];
+                    next_state[c + 1] = DEAD_COLOR[1];
+                    next_state[c + 2] = DEAD_COLOR[2];
+                    next_state[c + 3] = DEAD_COLOR[3];
+                }
+            }
+        }
+        board.data = next_state.clone();
+    };
+}
 
-        return Some([r, g, b, a]);
+fn handle_events(
+    mut resize_events: EventReader<WindowResized>,
+    mut board_sprite: Query<&mut Sprite, With<Board>>,
+    q_win: Query<&Window, With<PrimaryWindow>>,
+    keys: Res<Input<KeyCode>>,
+    buttons: Res<Input<MouseButton>>,
+    board_size: Res<BoardSize>,
+    mut images: ResMut<Assets<Image>>,
+    mut brush: ResMut<Brush>,
+    board_handle: Res<BoardHandle>,
+) {
+    // Resize the board sprite if the window's size has changed
+    for resize in resize_events.iter() {
+        let mut board = board_sprite.single_mut();
+        board.custom_size = Some(Vec2::new(resize.width, resize.height));
+    }
+    // J: makes the brush size smaller
+    if keys.pressed(KeyCode::J) {
+        if brush.size > 1 {
+            brush.size -= 1;
+        }
+    }
+    // J: makes the brush size smaller
+    if keys.pressed(KeyCode::K) {
+        if brush.size < u8::MAX {
+            brush.size += 1;
+        }
+    }
+
+    // We'll add a living cell on the point where mouse was pressed
+    if buttons.pressed(MouseButton::Left) {
+        let win = q_win.single();
+        if let Some(position) = win.cursor_position() {
+            // X in the texture buffer
+            let posx = (position.x / win.width() * board_size.rows as f32).round() as i32;
+            let posy = (position.y / win.height() * board_size.columns as f32).round() as i32;
+
+            let h = &board_handle.0;
+
+            if let Some(board) = images.get_mut(h) {
+                // We iterate through the square of the brush, we check if the pixel we picked is within the range of the circle around our cursor
+                for bx in -(brush.size as i32)..=brush.size as i32 {
+                    for by in -(brush.size as i32)..=brush.size as i32 {
+                        let x = posx + bx;
+                        let y = posy + by;
+
+                        let r = (((x - posx).pow(2) + (y - posy).pow(2)) as f32).sqrt();
+                        if r <= brush.size as f32 {
+                            if let Some(pixel) = board.get_pixel_mut(x, y) {
+                                unsafe {
+                                    *pixel[0] = ALIVE_COLOR[0];
+                                    *pixel[1] = ALIVE_COLOR[1];
+                                    *pixel[2] = ALIVE_COLOR[2];
+                                    *pixel[3] = ALIVE_COLOR[3];
+                                }
+                            };
+                        }
+                    }
+                }
+
+                // this probably can be done in a more rusty way instead of just raw pointers but the borrow checker wont let you do [&mut u8; 4] obv ~
+            }
+        }
     }
 }
 
+////////////////////////////////////////////////////////////////////////
+/// UTILS
+////////////////////////////////////////////////////////////////////////
 // Looks at a cell at a pixel in the image and determines if it's alive
 fn cell_state(image: &Image, x: i32, y: i32) -> State {
     // https://en.wikipedia.org/wiki/Conway%27s_Game_of_Life#Rules
@@ -192,47 +346,6 @@ fn cell_state(image: &Image, x: i32, y: i32) -> State {
     }
 }
 
-// Updates the next_state of the cells and after all the cells have been updated, state=next_state
-fn process_cells(
-    mut images: ResMut<Assets<Image>>,
-    board_handle: Res<BoardHandle>,
-    board_size: Res<BoardSize>,
-    mut next_state: Local<Vec<u8>>,
-) {
-    let h = &board_handle.0;
-
-    if let Some(board) = images.get_mut(h) {
-        if next_state.len() != board.data.len() {
-            // Initialize the buffer containing the next state
-            *next_state = board.data.clone();
-        }
-        for i in 0..(board.data.len() / 4) {
-            // component
-            let c = i * 4;
-
-            let y = (i as f32 / board_size.rows as f32).floor() as i32;
-            let x = i as i32 - y * board_size.rows as i32;
-
-            let new_cell_state = cell_state(&board, x, y);
-            match new_cell_state {
-                State::ALIVE => {
-                    next_state[c + 0] = ALIVE_COLOR[0];
-                    next_state[c + 1] = ALIVE_COLOR[1];
-                    next_state[c + 2] = ALIVE_COLOR[2];
-                    next_state[c + 3] = ALIVE_COLOR[3];
-                }
-                State::DEAD => {
-                    next_state[c + 0] = DEAD_COLOR[0];
-                    next_state[c + 1] = DEAD_COLOR[1];
-                    next_state[c + 2] = DEAD_COLOR[2];
-                    next_state[c + 3] = DEAD_COLOR[3];
-                }
-            }
-        }
-        board.data = next_state.clone();
-    };
-}
-
 // Seeds the state of the board (for now just a simple 50%)
 fn seed(mut images: ResMut<Assets<Image>>, board_handle: Res<BoardHandle>) {
     let h = &board_handle.0;
@@ -252,73 +365,55 @@ fn seed(mut images: ResMut<Assets<Image>>, board_handle: Res<BoardHandle>) {
     }
 }
 
-#[derive(Resource)]
-struct BoardHandle(Handle<Image>);
-#[derive(Resource)]
-struct BoardSize {
-    rows: u32,
-    columns: u32,
+trait Pixel {
+    fn get_pixel(&self, x: i32, y: i32) -> Option<[&u8; 4]>;
+    fn get_pixel_mut(&mut self, x: i32, y: i32) -> Option<[*mut u8; 4]>;
 }
-// Creates the entities and resources
-fn setup(mut commands: Commands, win_q: Query<&Window>, mut images: ResMut<Assets<Image>>) {
-    let win = win_q.single();
-    let rows = (win.width() / CELL_SIZE as f32).floor() as u32;
-    let columns = (win.height() / CELL_SIZE as f32).floor() as u32;
+impl Pixel for Image {
+    fn get_pixel(&self, x: i32, y: i32) -> Option<[&u8; 4]> {
+        let size = self.size();
 
-    let board = Image::new_fill(
-        bevy::render::render_resource::Extent3d {
-            width: rows,
-            height: columns,
-            depth_or_array_layers: 1,
-        },
-        bevy::render::render_resource::TextureDimension::D2,
-        &(DEAD_COLOR.clone()),
-        TextureFormat::Rgba8Unorm,
-    );
-    // text setup
-    let text_style = TextStyle {
-        font_size: 26.,
-        ..default()
-    };
-    let image = images.add(board);
-    commands.insert_resource(BoardHandle(image.clone()));
-    commands.insert_resource(BoardSize { rows, columns });
+        if x >= size.x as i32 || x < 0 as i32 || y >= size.y as i32 || y < 0 {
+            return None;
+        }
 
-    commands.spawn(Camera2dBundle {
-        camera_2d: Camera2d {
-            clear_color: ClearColorConfig::Custom(Color::BLACK),
-        },
-        ..default()
-    });
+        let pos = (y * size.x as i32 + x) * 4;
 
-    commands.insert_resource(LastUpdate(0.));
-    // keeps a 2x2 matrix of all the entities for faster indexing
+        let r = &self.data[(pos + 0) as usize];
+        let g = &self.data[(pos + 1) as usize];
+        let b = &self.data[(pos + 2) as usize];
+        let a = &self.data[(pos + 3) as usize];
 
-    commands.spawn(SpriteBundle {
-        sprite: Sprite {
-            custom_size: Some(Vec2::new(win.width() as f32, win.height() as f32)),
+        return Some([r, g, b, a]);
+    }
+    fn get_pixel_mut(&mut self, x: i32, y: i32) -> Option<[*mut u8; 4]> {
+        let size = self.size();
 
-            ..default()
-        },
-        texture: image.clone(),
-        ..default()
-    });
+        if x >= size.x as i32 || x < 0 as i32 || y >= size.y as i32 || y < 0 {
+            return None;
+        }
 
-    // UI - Add Text for fps counter
-    commands
-        .spawn(NodeBundle {
-            style: Style {
-                align_content: AlignContent::FlexStart,
-                align_items: AlignItems::Center,
-                flex_direction: FlexDirection::Row,
-                align_self: AlignSelf::Start,
-                ..default()
-            },
-            ..default()
-        })
-        .with_children(|parent| {
-            parent
-                .spawn(TextBundle::from_section("0", text_style))
-                .insert(FPSCounter);
-        });
+        let pos = (y * size.x as i32 + x) * 4;
+
+        let r = unsafe { self.data.as_mut_ptr().add(pos as usize + 0) };
+        let g = unsafe { self.data.as_mut_ptr().add(pos as usize + 1) };
+        let b = unsafe { self.data.as_mut_ptr().add(pos as usize + 2) };
+        let a = unsafe { self.data.as_mut_ptr().add(pos as usize + 3) };
+
+        return Some([r, g, b, a]);
+    }
+}
+impl State {
+    fn cell_state(data: &[&u8; 4]) -> State {
+        // cells are red
+        if *data[0] == ALIVE_COLOR[0]
+            && *data[1] == ALIVE_COLOR[1]
+            && *data[2] == ALIVE_COLOR[2]
+            && *data[3] == ALIVE_COLOR[3]
+        {
+            State::ALIVE
+        } else {
+            State::DEAD
+        }
+    }
 }
