@@ -11,7 +11,7 @@ use rand::Rng;
 
 const CELL_SIZE: u32 = 4;
 const TIME_STEP_SECS: f64 = 0.1;
-const ALIVE_COLOR: [u8; 4] = [63, 189, 238, 255];
+const ALIVE_COLOR: [u8; 4] = [64, 64, 243, 255];
 const DEAD_COLOR: [u8; 4] = [0, 0, 0, 255];
 
 ////////////////////////////////////////////////////////////////////////
@@ -75,7 +75,7 @@ pub fn main() {
             (
                 (process_cells).run_if(should_next_tick(TIME_STEP_SECS)),
                 (update_ui).run_if(should_update_counter(1.)), // Update the fps counter every 1 second
-                (handle_events),
+                (handle_events).after(process_cells),
             ),
         )
         .run();
@@ -277,6 +277,7 @@ fn handle_events(
 
                         let r = (((x - posx).pow(2) + (y - posy).pow(2)) as f32).sqrt();
                         if r <= brush.size as f32 {
+                            // this probably can be done in a more rusty way instead of just raw pointers but the borrow checker wont let you do [&mut u8; 4] obv ~
                             if let Some(pixel) = board.get_pixel_mut(x, y) {
                                 unsafe {
                                     *pixel[0] = ALIVE_COLOR[0];
@@ -288,8 +289,6 @@ fn handle_events(
                         }
                     }
                 }
-
-                // this probably can be done in a more rusty way instead of just raw pointers but the borrow checker wont let you do [&mut u8; 4] obv ~
             }
         }
     }
@@ -305,15 +304,15 @@ fn cell_state(image: &Image, x: i32, y: i32) -> State {
     let mut neighbours_alive = 0;
 
     // neighbours x
-    for n_x in -1..=1 {
+    for nx in -1..=1 {
         // neighbors y
-        for n_y in -1..=1 {
+        for ny in -1..=1 {
             // if its the center one (the cell we're determining)
-            if n_x == 0 && n_y == 0 {
+            if nx == 0 && ny == 0 {
                 continue;
             }
 
-            let n = image.get_pixel(x + n_x, y + n_y);
+            let n = image.get_pixel(x + nx, y + ny);
             if let Some(n_cell) = n {
                 match State::cell_state(&n_cell) {
                     State::ALIVE => neighbours_alive += 1,
