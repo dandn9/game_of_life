@@ -9,11 +9,6 @@ use bevy::{
 };
 use rand::Rng;
 
-pub const CELL_SIZE: u8 = 3;
-const TIME_STEP_SECS: f64 = 0.05;
-const ALIVE_COLOR: [u8; 4] = [64, 64, 243, 255];
-const DEAD_COLOR: [u8; 4] = [0, 0, 0, 255];
-
 ////////////////////////////////////////////////////////////////////////
 /// COMPONENTS
 ////////////////////////////////////////////////////////////////////////
@@ -28,6 +23,22 @@ struct Board;
 ////////////////////////////////////////////////////////////////////////
 /// RESOURCES
 ////////////////////////////////////////////////////////////////////////
+
+#[derive(PartialEq, Debug, Resource, Copy, Clone)]
+pub enum Seed {
+    Random,
+    Spaceship,
+    GosperGliderGun,
+    SimkinGliderGun,
+}
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct GameSettings {
+    pub cell_size: u8,
+    pub time_step_secs: f64,
+    pub alive_color: [u8; 4],
+    pub dead_color: [u8; 4],
+    pub seed: Seed,
+}
 #[derive(Resource, Debug)]
 pub struct Brush {
     pub size: u8,
@@ -41,6 +52,23 @@ struct BoardSize {
 }
 #[derive(Resource, Debug, Clone)]
 struct LastUpdate(f64);
+
+impl Default for Seed {
+    fn default() -> Self {
+        Seed::Random
+    }
+}
+impl Default for GameSettings {
+    fn default() -> Self {
+        GameSettings {
+            cell_size: 3,
+            time_step_secs: 0.05,
+            alive_color: [64, 64, 243, 255],
+            dead_color: [0, 0, 0, 255],
+            seed: Seed::default(),
+        }
+    }
+}
 
 ////////////////////////////////////////////////////////////////////////
 /// MAIN
@@ -67,12 +95,13 @@ pub fn init() {
             LogDiagnosticsPlugin::default(),
             crate::ui::GameOfLifeUI::default(),
         ))
+        .insert_resource(GameSettings::default())
         .add_systems(Startup, setup)
         .add_systems(PostStartup, seed) // commands need to be flushed
         .add_systems(
             Update,
             (
-                (process_cells).run_if(should_next_tick(TIME_STEP_SECS)),
+                (process_cells).run_if(should_next_tick),
                 (handle_events).after(process_cells),
             ),
         )
@@ -84,15 +113,17 @@ pub fn init() {
 ////////////////////////////////////////////////////////////////////////
 
 // Decides if the `evolution` systems run
-fn should_next_tick(t: f64) -> impl FnMut(Local<f64>, Res<Time>) -> bool {
-    move |mut previous_tick: Local<f64>, time: Res<Time>| {
-        // Tick the timer
-        if time.elapsed_seconds_f64() - (*previous_tick) >= t {
-            *previous_tick = time.elapsed_seconds_f64();
-            true
-        } else {
-            false
-        }
+fn should_next_tick(
+    settings: Res<GameSettings>,
+    mut previous_tick: Local<f64>,
+    time: Res<Time>,
+) -> bool {
+    let time_step = settings.time_step_secs;
+    if time.elapsed_seconds_f64() - (*previous_tick) >= time_step {
+        *previous_tick = time.elapsed_seconds_f64();
+        true
+    } else {
+        false
     }
 }
 ////////////////////////////////////////////////////////////////////////
@@ -100,10 +131,15 @@ fn should_next_tick(t: f64) -> impl FnMut(Local<f64>, Res<Time>) -> bool {
 ///////////////////////////////////////////////////////////////////////
 
 // Creates the entities and resources
-fn setup(mut commands: Commands, q_win: Query<&Window>, mut images: ResMut<Assets<Image>>) {
+fn setup(
+    mut commands: Commands,
+    q_win: Query<&Window>,
+    mut images: ResMut<Assets<Image>>,
+    settings: Res<GameSettings>,
+) {
     let win = q_win.single();
-    let rows = (win.width() / CELL_SIZE as f32).floor() as u32;
-    let columns = (win.height() / CELL_SIZE as f32).floor() as u32;
+    let rows = (win.width() / settings.cell_size as f32).floor() as u32;
+    let columns = (win.height() / settings.cell_size as f32).floor() as u32;
     let board = Image::new_fill(
         bevy::render::render_resource::Extent3d {
             width: rows,
@@ -111,7 +147,7 @@ fn setup(mut commands: Commands, q_win: Query<&Window>, mut images: ResMut<Asset
             depth_or_array_layers: 1,
         },
         bevy::render::render_resource::TextureDimension::D2,
-        &(DEAD_COLOR.clone()),
+        &(settings.dead_color.clone()),
         TextureFormat::Rgba8Unorm,
     );
     // text setup
@@ -149,6 +185,7 @@ fn process_cells(
     board_handle: Res<BoardHandle>,
     board_size: Res<BoardSize>,
     mut next_state: Local<Vec<u8>>,
+    settings: Res<GameSettings>,
 ) {
     let h = &board_handle.0;
 
@@ -164,19 +201,19 @@ fn process_cells(
             let y = (i as f32 / board_size.rows as f32).floor() as i32;
             let x = i as i32 - y * board_size.rows as i32;
 
-            let new_cell_state = cell_state(&board, x, y);
+            let new_cell_state = cell_state(&board, x, y, &settings);
             match new_cell_state {
                 State::ALIVE => {
-                    next_state[c + 0] = ALIVE_COLOR[0];
-                    next_state[c + 1] = ALIVE_COLOR[1];
-                    next_state[c + 2] = ALIVE_COLOR[2];
-                    next_state[c + 3] = ALIVE_COLOR[3];
+                    next_state[c + 0] = settings.alive_color[0];
+                    next_state[c + 1] = settings.alive_color[1];
+                    next_state[c + 2] = settings.alive_color[2];
+                    next_state[c + 3] = settings.alive_color[3];
                 }
                 State::DEAD => {
-                    next_state[c + 0] = DEAD_COLOR[0];
-                    next_state[c + 1] = DEAD_COLOR[1];
-                    next_state[c + 2] = DEAD_COLOR[2];
-                    next_state[c + 3] = DEAD_COLOR[3];
+                    next_state[c + 0] = settings.dead_color[0];
+                    next_state[c + 1] = settings.dead_color[1];
+                    next_state[c + 2] = settings.dead_color[2];
+                    next_state[c + 3] = settings.dead_color[3];
                 }
             }
         }
@@ -195,6 +232,7 @@ fn handle_events(
     mut brush: ResMut<Brush>,
     board_handle: Res<BoardHandle>,
     mut exit: EventWriter<bevy::app::AppExit>,
+    settings: Res<GameSettings>,
 ) {
     // Resize the board sprite if the window's size has changed
     for resize in resize_events.iter() {
@@ -240,10 +278,10 @@ fn handle_events(
                             // this probably can be done in a more rusty way instead of just raw pointers but the borrow checker wont let you do [&mut u8; 4] obv ~
                             if let Some(pixel) = board.get_pixel_mut(x, y) {
                                 unsafe {
-                                    *pixel[0] = ALIVE_COLOR[0];
-                                    *pixel[1] = ALIVE_COLOR[1];
-                                    *pixel[2] = ALIVE_COLOR[2];
-                                    *pixel[3] = ALIVE_COLOR[3];
+                                    *pixel[0] = settings.alive_color[0];
+                                    *pixel[1] = settings.alive_color[1];
+                                    *pixel[2] = settings.alive_color[2];
+                                    *pixel[3] = settings.alive_color[3];
                                 }
                             };
                         }
@@ -258,7 +296,7 @@ fn handle_events(
 /// UTILS
 ////////////////////////////////////////////////////////////////////////
 // Looks at a cell at a pixel in the image and determines if it's alive
-fn cell_state(image: &Image, x: i32, y: i32) -> State {
+fn cell_state(image: &Image, x: i32, y: i32, settings: &GameSettings) -> State {
     // https://en.wikipedia.org/wiki/Conway%27s_Game_of_Life#Rules
 
     let mut neighbours_alive = 0;
@@ -274,7 +312,7 @@ fn cell_state(image: &Image, x: i32, y: i32) -> State {
 
             let n = image.get_pixel(x + nx, y + ny);
             if let Some(n_cell) = n {
-                match State::cell_state(&n_cell) {
+                match State::cell_state(&n_cell, settings) {
                     State::ALIVE => neighbours_alive += 1,
                     State::DEAD => {}
                 }
@@ -282,7 +320,7 @@ fn cell_state(image: &Image, x: i32, y: i32) -> State {
         }
     }
 
-    let cell_state = State::cell_state(&image.get_pixel(x, y).unwrap());
+    let cell_state = State::cell_state(&image.get_pixel(x, y).unwrap(), settings);
 
     match cell_state {
         State::ALIVE => {
@@ -306,7 +344,11 @@ fn cell_state(image: &Image, x: i32, y: i32) -> State {
 }
 
 // Seeds the state of the board (for now just a simple 50%)
-fn seed(mut images: ResMut<Assets<Image>>, board_handle: Res<BoardHandle>) {
+fn seed(
+    mut images: ResMut<Assets<Image>>,
+    board_handle: Res<BoardHandle>,
+    settings: Res<GameSettings>,
+) {
     let h = &board_handle.0;
 
     let mut rng = rand::thread_rng();
@@ -315,10 +357,10 @@ fn seed(mut images: ResMut<Assets<Image>>, board_handle: Res<BoardHandle>) {
         for i in 0..(board.data.len() / 4) {
             let rand: f32 = rng.gen();
             if rand >= 0.5 {
-                board.data[i * 4 + 0] = ALIVE_COLOR[0];
-                board.data[i * 4 + 1] = ALIVE_COLOR[1];
-                board.data[i * 4 + 2] = ALIVE_COLOR[2];
-                board.data[i * 4 + 3] = ALIVE_COLOR[3];
+                board.data[i * 4 + 0] = settings.alive_color[0];
+                board.data[i * 4 + 1] = settings.alive_color[1];
+                board.data[i * 4 + 2] = settings.alive_color[2];
+                board.data[i * 4 + 3] = settings.alive_color[3];
             }
         }
     }
@@ -363,12 +405,12 @@ impl Pixel for Image {
     }
 }
 impl State {
-    fn cell_state(data: &[&u8; 4]) -> State {
+    fn cell_state(data: &[&u8; 4], settings: &GameSettings) -> State {
         // cells are red
-        if *data[0] == ALIVE_COLOR[0]
-            && *data[1] == ALIVE_COLOR[1]
-            && *data[2] == ALIVE_COLOR[2]
-            && *data[3] == ALIVE_COLOR[3]
+        if *data[0] == settings.alive_color[0]
+            && *data[1] == settings.alive_color[1]
+            && *data[2] == settings.alive_color[2]
+            && *data[3] == settings.alive_color[3]
         {
             State::ALIVE
         } else {
