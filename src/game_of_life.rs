@@ -9,8 +9,8 @@ use bevy::{
 };
 use rand::Rng;
 
-const CELL_SIZE: u32 = 4;
-const TIME_STEP_SECS: f64 = 0.1;
+pub const CELL_SIZE: u8 = 3;
+const TIME_STEP_SECS: f64 = 0.05;
 const ALIVE_COLOR: [u8; 4] = [64, 64, 243, 255];
 const DEAD_COLOR: [u8; 4] = [0, 0, 0, 255];
 
@@ -23,16 +23,14 @@ enum State {
     DEAD,
 }
 #[derive(Component)]
-struct FPSCounter;
-#[derive(Component)]
 struct Board;
 
 ////////////////////////////////////////////////////////////////////////
 /// RESOURCES
 ////////////////////////////////////////////////////////////////////////
-#[derive(Resource)]
-struct Brush {
-    size: u8,
+#[derive(Resource, Debug)]
+pub struct Brush {
+    pub size: u8,
 }
 #[derive(Resource)]
 struct BoardHandle(Handle<Image>);
@@ -48,7 +46,7 @@ struct LastUpdate(f64);
 /// MAIN
 ////////////////////////////////////////////////////////////////////////
 
-pub fn main() {
+pub fn init() {
     App::new()
         .add_plugins((
             DefaultPlugins
@@ -67,6 +65,7 @@ pub fn main() {
                 .set(ImagePlugin::default_nearest()),
             FrameTimeDiagnosticsPlugin::default(),
             LogDiagnosticsPlugin::default(),
+            crate::ui::GameOfLifeUI::default(),
         ))
         .add_systems(Startup, setup)
         .add_systems(PostStartup, seed) // commands need to be flushed
@@ -74,7 +73,6 @@ pub fn main() {
             Update,
             (
                 (process_cells).run_if(should_next_tick(TIME_STEP_SECS)),
-                (update_ui).run_if(should_update_counter(1.)), // Update the fps counter every 1 second
                 (handle_events).after(process_cells),
             ),
         )
@@ -84,18 +82,6 @@ pub fn main() {
 ////////////////////////////////////////////////////////////////////////
 /// RUN CONDITIONS
 ////////////////////////////////////////////////////////////////////////
-
-fn should_update_counter(interval: f64) -> impl FnMut(Local<f64>, Res<Time>) -> bool {
-    move |mut prev_interval: Local<f64>, time: Res<Time>| {
-        if *prev_interval >= interval {
-            *prev_interval = 0.;
-            true
-        } else {
-            *prev_interval += time.delta_seconds_f64();
-            false
-        }
-    }
-}
 
 // Decides if the `evolution` systems run
 fn should_next_tick(t: f64) -> impl FnMut(Local<f64>, Res<Time>) -> bool {
@@ -129,10 +115,6 @@ fn setup(mut commands: Commands, q_win: Query<&Window>, mut images: ResMut<Asset
         TextureFormat::Rgba8Unorm,
     );
     // text setup
-    let text_style = TextStyle {
-        font_size: 26.,
-        ..default()
-    };
     let image = images.add(board);
 
     // Initialize resources
@@ -159,33 +141,6 @@ fn setup(mut commands: Commands, q_win: Query<&Window>, mut images: ResMut<Asset
             ..default()
         })
         .insert(Board);
-
-    // UI - Add Text for fps counter
-    commands
-        .spawn(NodeBundle {
-            style: Style {
-                align_content: AlignContent::FlexStart,
-                align_items: AlignItems::Center,
-                flex_direction: FlexDirection::Row,
-                align_self: AlignSelf::Start,
-                ..default()
-            },
-            ..default()
-        })
-        .with_children(|parent| {
-            parent
-                .spawn(TextBundle::from_section("0", text_style))
-                .insert(FPSCounter);
-        });
-}
-fn update_ui(time: Res<Time>, mut counter: Query<&mut Text, With<FPSCounter>>) {
-    let delta_time = time.delta_seconds_f64();
-    let fps = (1. / delta_time) as i32;
-
-    let mut text = counter.single_mut();
-    if let Some(section) = text.sections.first_mut() {
-        section.value = fps.to_string();
-    }
 }
 
 // Updates the next_state of the cells and after all the cells have been updated, state=next_state
@@ -239,6 +194,7 @@ fn handle_events(
     mut images: ResMut<Assets<Image>>,
     mut brush: ResMut<Brush>,
     board_handle: Res<BoardHandle>,
+    mut exit: EventWriter<bevy::app::AppExit>,
 ) {
     // Resize the board sprite if the window's size has changed
     for resize in resize_events.iter() {
@@ -256,6 +212,10 @@ fn handle_events(
         if brush.size < u8::MAX {
             brush.size += 1;
         }
+    }
+    // Exit the app if we press Esc
+    if keys.pressed(KeyCode::Escape) {
+        exit.send(bevy::app::AppExit);
     }
 
     // We'll add a living cell on the point where mouse was pressed
