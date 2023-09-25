@@ -117,12 +117,27 @@ fn egui_init(
                         .text("Cell Size"),
                 );
 
-                let mut selected = settings.seed.clone();
+                // COLORS
                 let mut egui_alive_color: [f32; 4] = u8_255_color_to_f32_1(settings.alive_color);
+                ui.label("Alive color");
                 ui.color_edit_button_rgba_unmultiplied(&mut egui_alive_color);
                 let mut egui_dead_color: [f32; 4] = u8_255_color_to_f32_1(settings.dead_color);
+                ui.label("Dead color");
                 ui.color_edit_button_rgba_unmultiplied(&mut egui_dead_color);
+
+                let egui_u8_alive_color = f32_1_color_to_u8_255(egui_alive_color);
+                let egui_u8_dead_color = f32_1_color_to_u8_255(egui_dead_color);
+                if (egui_u8_alive_color != settings.alive_color
+                    || egui_u8_dead_color != settings.dead_color)
+                    && egui_u8_alive_color != egui_u8_dead_color
+                {
+                    ui_event.send(UIEvent::ChangeColor(
+                        egui_u8_alive_color,
+                        egui_u8_dead_color,
+                    ));
+                };
                 // Select with all the possible seeds
+                let mut selected = settings.seed.clone();
                 egui::ComboBox::from_label("Seed")
                     .selected_text(format!("{:?}", selected))
                     .show_ui(ui, |ui| {
@@ -148,18 +163,9 @@ fn egui_init(
                         );
                     });
 
-                let egui_u8_alive_color = f32_1_color_to_u8_255(egui_alive_color);
-                let egui_u8_dead_color = f32_1_color_to_u8_255(egui_dead_color);
-                if (egui_u8_alive_color != settings.alive_color
-                    || egui_u8_dead_color != settings.dead_color)
-                    && egui_u8_alive_color != egui_u8_dead_color
-                {
-                    ui_event.send(UIEvent::ChangeColor(
-                        egui_u8_alive_color,
-                        egui_u8_dead_color,
-                    ));
-                };
-
+                if settings.seed != selected {
+                    ui_event.send(UIEvent::ChangeSeed(selected));
+                }
                 // settings.seed = selected;
                 // settings.alive_color = [
                 //     (egui_color[0] * 255.).round() as u8,

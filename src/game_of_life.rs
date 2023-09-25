@@ -57,7 +57,7 @@ struct LastUpdate(f64);
 
 impl Default for Seed {
     fn default() -> Self {
-        Seed::Random
+        Seed::GosperGliderGun
     }
 }
 impl Default for GameSettings {
@@ -99,7 +99,6 @@ pub fn init() {
         ))
         .insert_resource(GameSettings::default())
         .add_systems(Startup, setup)
-        .add_systems(PostStartup, seed) // commands need to be flushed
         .add_systems(Update, process_cells)
         .add_systems(Last, (handle_ui_events, handle_events))
         .run();
@@ -137,7 +136,7 @@ fn setup(
     let win = q_win.single();
     let rows = (win.width() / settings.cell_size as f32).floor() as u32;
     let columns = (win.height() / settings.cell_size as f32).floor() as u32;
-    let board = Image::new_fill(
+    let mut board = Image::new_fill(
         bevy::render::render_resource::Extent3d {
             width: rows,
             height: columns,
@@ -147,6 +146,8 @@ fn setup(
         &(settings.dead_color.clone()),
         TextureFormat::Rgba8Unorm,
     );
+    // Seed the board
+    seed(&mut board, &settings);
     // text setup
     let image = images.add(board);
 
@@ -269,7 +270,13 @@ fn handle_ui_events(
                 settings.alive_color = alive_color;
                 settings.dead_color = dead_color;
             }
-            UIEvent::ChangeSeed(_) => info!("CHANGE Seed"),
+            UIEvent::ChangeSeed(seed_value) => {
+                let h = &board_handle.0;
+                let board = images.get_mut(h).unwrap();
+                settings.seed = seed_value;
+                reset_board(board, &settings);
+                seed(board, &settings);
+            }
         }
     }
 }
@@ -347,6 +354,105 @@ fn handle_events(
 ////////////////////////////////////////////////////////////////////////
 /// UTILS
 ////////////////////////////////////////////////////////////////////////
+
+// Puts the whole board on dead
+fn reset_board(board: &mut Image, settings: &GameSettings) {
+    for i in 0..board.data.len() / 4 {
+        let c = i * 4;
+        board.data[c + 0] = settings.dead_color[0];
+        board.data[c + 1] = settings.dead_color[1];
+        board.data[c + 2] = settings.dead_color[2];
+        board.data[c + 3] = settings.dead_color[3];
+    }
+}
+// Seeds the state of the board (for now just a simple 50%)
+fn seed(board: &mut Image, settings: &GameSettings) {
+    // match settings.seed
+
+    match settings.seed {
+        Seed::Random => {
+            let mut rng = rand::thread_rng();
+            for i in 0..(board.data.len() / 4) {
+                let rand: f32 = rng.gen();
+                if rand >= 0.5 {
+                    board.data[i * 4 + 0] = settings.alive_color[0];
+                    board.data[i * 4 + 1] = settings.alive_color[1];
+                    board.data[i * 4 + 2] = settings.alive_color[2];
+                    board.data[i * 4 + 3] = settings.alive_color[3];
+                }
+            }
+        }
+        // TODO: make this better XD
+        Seed::GosperGliderGun => {
+            // https://upload.wikimedia.org/wikipedia/commons/thumb/e/e0/Game_of_life_glider_gun.svg/500px-Game_of_life_glider_gun.svg.png
+            #[rustfmt::skip]
+            let glider_gun = vec![
+                vec![0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0],
+                vec![0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0],
+                vec![0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,1,1],
+                vec![0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,1,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,1,1],
+                vec![1,1,0,0,0,0,0,0,0,0,1,0,0,0,0,0,1,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                vec![1,1,0,0,0,0,0,0,0,0,1,0,0,0,1,0,1,1,0,0,0,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0],
+                vec![0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0],
+                vec![0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                vec![0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            ];
+
+            let gun_to_buff_values = |settings: &GameSettings, gun: &Vec<Vec<i32>>| {
+                let mut res: Vec<Vec<u8>> = vec![];
+                for i in 0..gun.len() {
+                    let row = &gun[i];
+                    let mut r = vec![];
+                    for j in 0..row.len() {
+                        if row[j] == 1 {
+                            r.push(settings.alive_color[0]);
+                            r.push(settings.alive_color[1]);
+                            r.push(settings.alive_color[2]);
+                            r.push(settings.alive_color[3]);
+                        } else {
+                            r.push(settings.dead_color[0]);
+                            r.push(settings.dead_color[1]);
+                            r.push(settings.dead_color[2]);
+                            r.push(settings.dead_color[3]);
+                        }
+                    }
+                    res.push(r);
+                }
+                return res;
+            };
+            let board_size = board.size();
+
+            let values = gun_to_buff_values(settings, &glider_gun);
+
+            #[rustfmt::skip]
+            let offset_y = if glider_gun.len() as f32 % 2. != 0. { 1 } else { 0 };
+            #[rustfmt::skip]
+            let offset_x = if glider_gun[0].len() as f32 % 2. != 0. { 1 } else { 0 };
+
+            let center = board_size / 2.;
+            let x_start = center.x as usize - glider_gun[0].len() / 2;
+            let x_end = (center.x as usize + glider_gun[0].len() / 2) + offset_x;
+            let y_start = center.y as usize - glider_gun.len() / 2;
+            let y_end = (center.y as usize + glider_gun.len() / 2) + offset_y;
+
+            let mut yy = 0;
+            let mut xx = 0;
+            for i in y_start..y_end {
+                for j in x_start..x_end {
+                    let offset = (i * board_size.x as usize * 4) + j * 4;
+                    board.data[offset + 0] = values[yy][xx + 0];
+                    board.data[offset + 1] = values[yy][xx + 1];
+                    board.data[offset + 2] = values[yy][xx + 2];
+                    board.data[offset + 3] = values[yy][xx + 3];
+                    xx += 4;
+                }
+                xx = 0;
+                yy += 1;
+            }
+        }
+        _ => {}
+    }
+}
 // Looks at a cell at a pixel in the image and determines if it's alive
 fn cell_state(image: &Image, x: i32, y: i32, settings: &GameSettings) -> State {
     // https://en.wikipedia.org/wiki/Conway%27s_Game_of_Life#Rules
@@ -391,28 +497,6 @@ fn cell_state(image: &Image, x: i32, y: i32, settings: &GameSettings) -> State {
             } else {
                 return State::DEAD;
             }
-        }
-    }
-}
-
-// Seeds the state of the board (for now just a simple 50%)
-fn seed(
-    mut images: ResMut<Assets<Image>>,
-    board_handle: Res<BoardHandle>,
-    settings: Res<GameSettings>,
-) {
-    let h = &board_handle.0;
-
-    let mut rng = rand::thread_rng();
-
-    let board = images.get_mut(h).unwrap();
-    for i in 0..(board.data.len() / 4) {
-        let rand: f32 = rng.gen();
-        if rand >= 0.5 {
-            board.data[i * 4 + 0] = settings.alive_color[0];
-            board.data[i * 4 + 1] = settings.alive_color[1];
-            board.data[i * 4 + 2] = settings.alive_color[2];
-            board.data[i * 4 + 3] = settings.alive_color[3];
         }
     }
 }
