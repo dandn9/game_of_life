@@ -9,6 +9,8 @@ use bevy::{
 };
 use rand::Rng;
 
+use crate::ui::UIEvent;
+
 ////////////////////////////////////////////////////////////////////////
 /// COMPONENTS
 ////////////////////////////////////////////////////////////////////////
@@ -98,13 +100,8 @@ pub fn init() {
         .insert_resource(GameSettings::default())
         .add_systems(Startup, setup)
         .add_systems(PostStartup, seed) // commands need to be flushed
-        .add_systems(
-            Update,
-            (
-                (process_cells).run_if(should_next_tick),
-                (handle_events).after(process_cells),
-            ),
-        )
+        .add_systems(Update, process_cells)
+        .add_systems(Last, (handle_ui_events, handle_events))
         .run();
 }
 
@@ -113,19 +110,19 @@ pub fn init() {
 ////////////////////////////////////////////////////////////////////////
 
 // Decides if the `evolution` systems run
-fn should_next_tick(
-    settings: Res<GameSettings>,
-    mut previous_tick: Local<f64>,
-    time: Res<Time>,
-) -> bool {
-    let time_step = settings.time_step_secs;
-    if time.elapsed_seconds_f64() - (*previous_tick) >= time_step {
-        *previous_tick = time.elapsed_seconds_f64();
-        true
-    } else {
-        false
-    }
-}
+// fn should_next_tick(
+//     settings: Res<GameSettings>,
+//     mut previous_tick: Local<f64>,
+//     time: Res<Time>,
+// ) -> bool {
+//     let time_step = settings.time_step_secs;
+//     if time.elapsed_seconds_f64() - (*previous_tick) >= time_step {
+//         *previous_tick = time.elapsed_seconds_f64();
+//         true
+//     } else {
+//         false
+//     }
+// }
 ////////////////////////////////////////////////////////////////////////
 /// SYSTEMS
 ///////////////////////////////////////////////////////////////////////
@@ -186,41 +183,96 @@ fn process_cells(
     board_size: Res<BoardSize>,
     mut next_state: Local<Vec<u8>>,
     settings: Res<GameSettings>,
+    mut previous_tick: Local<f64>,
+    time: Res<Time>,
 ) {
+    // Check in the system since run conditions mess up with the scheduling
+    let time_step = settings.time_step_secs;
+    if time.elapsed_seconds_f64() - (*previous_tick) <= time_step {
+        return ();
+    }
+    *previous_tick = time.elapsed_seconds_f64();
     let h = &board_handle.0;
 
-    if let Some(board) = images.get_mut(h) {
-        if next_state.len() != board.data.len() {
-            // Initialize the buffer containing the next state
-            *next_state = board.data.clone();
-        }
-        for i in 0..(board.data.len() / 4) {
-            // component
-            let c = i * 4;
+    let board = images.get_mut(h).unwrap();
+    if next_state.len() != board.data.len() {
+        // Initialize the buffer containing the next state
+        *next_state = board.data.clone();
+    }
+    for i in 0..(board.data.len() / 4) {
+        // component
+        let c = i * 4;
 
-            let y = (i as f32 / board_size.rows as f32).floor() as i32;
-            let x = i as i32 - y * board_size.rows as i32;
+        let y = (i as f32 / board_size.rows as f32).floor() as i32;
+        let x = i as i32 - y * board_size.rows as i32;
 
-            let new_cell_state = cell_state(&board, x, y, &settings);
-            match new_cell_state {
-                State::ALIVE => {
-                    next_state[c + 0] = settings.alive_color[0];
-                    next_state[c + 1] = settings.alive_color[1];
-                    next_state[c + 2] = settings.alive_color[2];
-                    next_state[c + 3] = settings.alive_color[3];
-                }
-                State::DEAD => {
-                    next_state[c + 0] = settings.dead_color[0];
-                    next_state[c + 1] = settings.dead_color[1];
-                    next_state[c + 2] = settings.dead_color[2];
-                    next_state[c + 3] = settings.dead_color[3];
-                }
+        let new_cell_state = cell_state(&board, x, y, &settings);
+
+        match new_cell_state {
+            State::ALIVE => {
+                next_state[c + 0] = settings.alive_color[0];
+                next_state[c + 1] = settings.alive_color[1];
+                next_state[c + 2] = settings.alive_color[2];
+                next_state[c + 3] = settings.alive_color[3];
+            }
+            State::DEAD => {
+                next_state[c + 0] = settings.dead_color[0];
+                next_state[c + 1] = settings.dead_color[1];
+                next_state[c + 2] = settings.dead_color[2];
+                next_state[c + 3] = settings.dead_color[3];
             }
         }
-        board.data = next_state.clone();
-    };
+    }
+    board.data = next_state.clone();
 }
 
+// // Events triggered by the ui
+fn handle_ui_events(
+    mut ui_events: EventReader<UIEvent>,
+    mut images: ResMut<Assets<Image>>,
+    board_handle: Res<BoardHandle>,
+    mut settings: ResMut<GameSettings>,
+) {
+    for ev in ui_events.iter() {
+        match *ev {
+            UIEvent::ChangeColor(alive_color, dead_color) => {
+                info!("CHANGE COLOR {:?} {:?}", alive_color, dead_color);
+                let h = &board_handle.0;
+                let board = images.get_mut(h).unwrap();
+                // let mut data = board.data;
+                for i in 0..(board.data.len() / 4) {
+                    let c = i * 4;
+                    let state = State::cell_state(
+                        &[
+                            &board.data[c + 0],
+                            &board.data[c + 1],
+                            &board.data[c + 2],
+                            &board.data[c + 3],
+                        ],
+                        &settings,
+                    );
+                    match state {
+                        State::ALIVE => {
+                            board.data[c + 0] = alive_color[0];
+                            board.data[c + 1] = alive_color[1];
+                            board.data[c + 2] = alive_color[2];
+                            board.data[c + 3] = alive_color[3];
+                        }
+                        State::DEAD => {
+                            board.data[c + 0] = dead_color[0];
+                            board.data[c + 1] = dead_color[1];
+                            board.data[c + 2] = dead_color[2];
+                            board.data[c + 3] = dead_color[3];
+                        }
+                    }
+                }
+                settings.alive_color = alive_color;
+                settings.dead_color = dead_color;
+            }
+            UIEvent::ChangeSeed(_) => info!("CHANGE Seed"),
+        }
+    }
+}
 fn handle_events(
     mut resize_events: EventReader<WindowResized>,
     mut board_sprite: Query<&mut Sprite, With<Board>>,
@@ -353,15 +405,14 @@ fn seed(
 
     let mut rng = rand::thread_rng();
 
-    if let Some(board) = images.get_mut(h) {
-        for i in 0..(board.data.len() / 4) {
-            let rand: f32 = rng.gen();
-            if rand >= 0.5 {
-                board.data[i * 4 + 0] = settings.alive_color[0];
-                board.data[i * 4 + 1] = settings.alive_color[1];
-                board.data[i * 4 + 2] = settings.alive_color[2];
-                board.data[i * 4 + 3] = settings.alive_color[3];
-            }
+    let board = images.get_mut(h).unwrap();
+    for i in 0..(board.data.len() / 4) {
+        let rand: f32 = rng.gen();
+        if rand >= 0.5 {
+            board.data[i * 4 + 0] = settings.alive_color[0];
+            board.data[i * 4 + 1] = settings.alive_color[1];
+            board.data[i * 4 + 2] = settings.alive_color[2];
+            board.data[i * 4 + 3] = settings.alive_color[3];
         }
     }
 }

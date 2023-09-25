@@ -1,5 +1,6 @@
 use bevy::{
     a11y::accesskit::TextSelection,
+    app::RunFixedUpdateLoop,
     prelude::*,
     render::extract_resource::{ExtractResource, ExtractResourcePlugin},
     sprite::MaterialMesh2dBundle,
@@ -10,7 +11,7 @@ use bevy_egui::{
     EguiContexts, EguiPlugin,
 };
 
-use crate::game_of_life::GameSettings;
+use crate::game_of_life::{GameSettings, Seed};
 
 /**
  *  This plugin is responsible for the UI of the game
@@ -26,6 +27,12 @@ impl Default for GameOfLifeUI {
     }
 }
 
+#[derive(Event)]
+pub enum UIEvent {
+    ChangeColor([u8; 4], [u8; 4]), // New alive and dead colors
+    ChangeSeed(Seed),
+}
+
 #[derive(Component)]
 struct FPSCounter;
 
@@ -35,10 +42,11 @@ struct UI;
 impl Plugin for GameOfLifeUI {
     fn build(&self, app: &mut App) {
         app.insert_resource(GameOfLifeUI::default())
+            .add_event::<UIEvent>()
             .add_plugins(bevy_egui::EguiPlugin)
             .add_systems(Startup, setup)
             .add_systems(
-                Update,
+                PostUpdate,
                 (
                     egui_init,
                     handle_events,
@@ -83,7 +91,8 @@ fn egui_init(
     mut eguic: EguiContexts,
     q_win: Query<&Window, With<PrimaryWindow>>,
     ui_state: Res<GameOfLifeUI>,
-    mut settings: ResMut<GameSettings>,
+    mut settings: Res<GameSettings>,
+    mut ui_event: EventWriter<UIEvent>,
 ) {
     if ui_state.show {
         egui::Window::new("id")
@@ -101,21 +110,18 @@ fn egui_init(
 
                 // ui.add(ComboBox::new(23, "xd"));
 
-                let cell_size = &mut settings.cell_size;
+                let mut cell_size = settings.cell_size;
                 ui.add(
-                    egui::Slider::new(cell_size, 1..=30)
+                    egui::Slider::new(&mut cell_size, 1..=30)
                         .step_by(1.0)
                         .text("Cell Size"),
                 );
 
                 let mut selected = settings.seed.clone();
-                let mut egui_color: [f32; 4] = [
-                    settings.alive_color[0] as f32 / 255.,
-                    settings.alive_color[1] as f32 / 255.,
-                    settings.alive_color[2] as f32 / 255.,
-                    settings.alive_color[3] as f32 / 255.,
-                ];
-                ui.color_edit_button_rgba_unmultiplied(&mut egui_color);
+                let mut egui_alive_color: [f32; 4] = u8_255_color_to_f32_1(settings.alive_color);
+                ui.color_edit_button_rgba_unmultiplied(&mut egui_alive_color);
+                let mut egui_dead_color: [f32; 4] = u8_255_color_to_f32_1(settings.dead_color);
+                ui.color_edit_button_rgba_unmultiplied(&mut egui_dead_color);
                 // Select with all the possible seeds
                 egui::ComboBox::from_label("Seed")
                     .selected_text(format!("{:?}", selected))
@@ -142,13 +148,25 @@ fn egui_init(
                         );
                     });
 
-                settings.seed = selected;
-                settings.alive_color = [
-                    (egui_color[0] * 255.).round() as u8,
-                    (egui_color[1] * 255.).round() as u8,
-                    (egui_color[2] * 255.).round() as u8,
-                    (egui_color[3] * 255.).round() as u8,
-                ];
+                let egui_u8_alive_color = f32_1_color_to_u8_255(egui_alive_color);
+                let egui_u8_dead_color = f32_1_color_to_u8_255(egui_dead_color);
+                if (egui_u8_alive_color != settings.alive_color
+                    || egui_u8_dead_color != settings.dead_color)
+                    && egui_u8_alive_color != egui_u8_dead_color
+                {
+                    ui_event.send(UIEvent::ChangeColor(
+                        egui_u8_alive_color,
+                        egui_u8_dead_color,
+                    ));
+                };
+
+                // settings.seed = selected;
+                // settings.alive_color = [
+                //     (egui_color[0] * 255.).round() as u8,
+                //     (egui_color[1] * 255.).round() as u8,
+                //     (egui_color[2] * 255.).round() as u8,
+                //     (egui_color[3] * 255.).round() as u8,
+                // ];
 
                 // info!("SELECTED {:?}", selected);
                 ui.label("YO");
@@ -167,6 +185,23 @@ fn egui_init(
     //     }
     //     ui.label(format!("Hello '{}', age {}", "xd", 5));
     // });
+}
+
+fn f32_1_color_to_u8_255(color: [f32; 4]) -> [u8; 4] {
+    return [
+        (color[0] * 255.).round() as u8,
+        (color[1] * 255.).round() as u8,
+        (color[2] * 255.).round() as u8,
+        (color[3] * 255.).round() as u8,
+    ];
+}
+fn u8_255_color_to_f32_1(color: [u8; 4]) -> [f32; 4] {
+    return [
+        color[0] as f32 / 255.,
+        color[1] as f32 / 255.,
+        color[2] as f32 / 255.,
+        color[3] as f32 / 255.,
+    ];
 }
 fn handle_events(keys: Res<Input<KeyCode>>, mut ui_state: ResMut<GameOfLifeUI>) {
     // Toggle the ui if U is pressed
