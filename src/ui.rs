@@ -31,6 +31,8 @@ impl Default for GameOfLifeUI {
 pub enum UIEvent {
     ChangeColor([u8; 4], [u8; 4]), // New alive and dead colors
     ChangeSeed(Seed),
+    ChangeTimestep(f32),
+    ChangeCellSize(u8),
 }
 
 #[derive(Component)]
@@ -100,16 +102,22 @@ fn egui_init(
             .anchor(Align2::RIGHT_TOP, egui::vec2(0., 0.))
             .movable(false)
             .show(eguic.ctx_mut(), |ui| {
-                // let mut selected = Seed::Default;
+                // TIMESTEP
+                let mut val: f32 = settings.time_step_secs;
+                ui.horizontal(|ui| {
+                    ui.label("Timestep");
+                    ui.add(
+                        egui::DragValue::new(&mut val)
+                            .speed(0.01)
+                            .clamp_range(0.01..=5.0),
+                    );
+                });
 
-                // let a = ui.add(egui::ComboBox::from_label("SelectOne!").show_ui(ui, |ui| {
-                //     ui.selectable_value(&mut selected, Enum::First, "First");
-                //     ui.selectable_value(&mut selected, Enum::Second, "Second");
-                //     ui.selectable_value(&mut selected, Enum::Third, "Third");
-                // }));
+                if val != settings.time_step_secs {
+                    ui_event.send(UIEvent::ChangeTimestep(val));
+                }
 
-                // ui.add(ComboBox::new(23, "xd"));
-
+                // CELL SIZE
                 let mut cell_size = settings.cell_size;
                 ui.add(
                     egui::Slider::new(&mut cell_size, 1..=30)
@@ -117,13 +125,21 @@ fn egui_init(
                         .text("Cell Size"),
                 );
 
+                if cell_size != settings.cell_size {
+                    ui_event.send(UIEvent::ChangeCellSize(cell_size))
+                }
+
                 // COLORS
                 let mut egui_alive_color: [f32; 4] = u8_255_color_to_f32_1(settings.alive_color);
-                ui.label("Alive color");
-                ui.color_edit_button_rgba_unmultiplied(&mut egui_alive_color);
+                ui.horizontal(|ui| {
+                    ui.label("Alive color");
+                    ui.color_edit_button_rgba_unmultiplied(&mut egui_alive_color);
+                });
                 let mut egui_dead_color: [f32; 4] = u8_255_color_to_f32_1(settings.dead_color);
-                ui.label("Dead color");
-                ui.color_edit_button_rgba_unmultiplied(&mut egui_dead_color);
+                ui.horizontal(|ui| {
+                    ui.label("Dead color");
+                    ui.color_edit_button_rgba_unmultiplied(&mut egui_dead_color);
+                });
 
                 let egui_u8_alive_color = f32_1_color_to_u8_255(egui_alive_color);
                 let egui_u8_dead_color = f32_1_color_to_u8_255(egui_dead_color);
@@ -136,6 +152,7 @@ fn egui_init(
                         egui_u8_dead_color,
                     ));
                 };
+
                 // Select with all the possible seeds
                 let mut selected = settings.seed.clone();
                 egui::ComboBox::from_label("Seed")
@@ -166,15 +183,6 @@ fn egui_init(
                 if settings.seed != selected {
                     ui_event.send(UIEvent::ChangeSeed(selected));
                 }
-                // settings.seed = selected;
-                // settings.alive_color = [
-                //     (egui_color[0] * 255.).round() as u8,
-                //     (egui_color[1] * 255.).round() as u8,
-                //     (egui_color[2] * 255.).round() as u8,
-                //     (egui_color[3] * 255.).round() as u8,
-                // ];
-
-                // info!("SELECTED {:?}", selected);
                 ui.label("YO");
             });
     }
