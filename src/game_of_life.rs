@@ -52,8 +52,6 @@ struct BoardSize {
     rows: u32,
     columns: u32,
 }
-#[derive(Resource, Debug, Clone)]
-struct LastUpdate(f64);
 
 impl Default for Seed {
     fn default() -> Self {
@@ -64,7 +62,7 @@ impl Default for GameSettings {
     fn default() -> Self {
         GameSettings {
             cell_size: 3,
-            time_step_secs: 0.01,
+            time_step_secs: 0.03,
             alive_color: [64, 64, 243, 255],
             dead_color: [0, 0, 0, 255],
             seed: Seed::default(),
@@ -148,7 +146,6 @@ fn setup(
     commands.insert_resource(BoardHandle(image.clone()));
     commands.insert_resource(BoardSize { rows, columns });
     commands.insert_resource(Brush { size: 1 });
-    commands.insert_resource(LastUpdate(0.));
 
     commands.spawn(Camera2dBundle {
         camera_2d: Camera2d {
@@ -239,12 +236,13 @@ fn process_cells(
 fn handle_ui_events(
     mut ui_events: EventReader<UIEvent>,
     mut images: ResMut<Assets<Image>>,
-    board_handle: Res<BoardHandle>,
+    mut board_handle: ResMut<BoardHandle>,
     mut settings: ResMut<GameSettings>,
 
     mut texture: Query<&mut Handle<Image>, With<Board>>, // The handle to the board's texture
     mut commands: Commands,
     q_win: Query<&Window>,
+    mut board_size: ResMut<BoardSize>,
 ) {
     for ev in ui_events.iter() {
         match *ev {
@@ -295,6 +293,18 @@ fn handle_ui_events(
             UIEvent::ChangeCellSize(cell_size) => {
                 images.remove(&board_handle.0);
                 settings.cell_size = cell_size;
+                let window = q_win.single();
+                let mut new_board = create_board(&settings, &window);
+                seed(&mut new_board.0, &settings);
+                let image_handle = images.add(new_board.0);
+                let mut texture = texture.single_mut();
+
+                *texture = image_handle.clone();
+                *board_handle = BoardHandle(image_handle.clone());
+                *board_size = BoardSize {
+                    rows: new_board.1,
+                    columns: new_board.2,
+                };
             }
 
             _ => {}
@@ -313,6 +323,7 @@ fn handle_events(
     board_handle: Res<BoardHandle>,
     mut exit: EventWriter<bevy::app::AppExit>,
     settings: Res<GameSettings>,
+    mut eguic: bevy_egui::EguiContexts,
 ) {
     // Resize the board sprite if the window's size has changed
     for resize in resize_events.iter() {
@@ -338,6 +349,12 @@ fn handle_events(
 
     // We'll add a living cell on the point where mouse was pressed
     if buttons.pressed(MouseButton::Left) {
+        let eguictx = eguic.ctx_mut();
+        // Skip the event if mouse is over UI element
+        if eguictx.is_pointer_over_area() {
+            return ();
+        }
+
         let win = q_win.single();
         if let Some(position) = win.cursor_position() {
             // X in the texture buffer

@@ -183,7 +183,6 @@ fn egui_init(
                 if settings.seed != selected {
                     ui_event.send(UIEvent::ChangeSeed(selected));
                 }
-                ui.label("YO");
             });
     }
     // let a = .show(eguic.ctx_mut(), |ui| {
