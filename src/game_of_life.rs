@@ -36,7 +36,7 @@ pub enum Seed {
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct GameSettings {
     pub cell_size: u8,
-    pub time_step_secs: f64,
+    pub time_step_secs: f32,
     pub alive_color: [u8; 4],
     pub dead_color: [u8; 4],
     pub seed: Seed,
@@ -52,19 +52,17 @@ struct BoardSize {
     rows: u32,
     columns: u32,
 }
-#[derive(Resource, Debug, Clone)]
-struct LastUpdate(f64);
 
 impl Default for Seed {
     fn default() -> Self {
-        Seed::GosperGliderGun
+        Seed::Random
     }
 }
 impl Default for GameSettings {
     fn default() -> Self {
         GameSettings {
             cell_size: 3,
-            time_step_secs: 0.05,
+            time_step_secs: 0.03,
             alive_color: [64, 64, 243, 255],
             dead_color: [0, 0, 0, 255],
             seed: Seed::default(),
@@ -134,18 +132,11 @@ fn setup(
     settings: Res<GameSettings>,
 ) {
     let win = q_win.single();
-    let rows = (win.width() / settings.cell_size as f32).floor() as u32;
-    let columns = (win.height() / settings.cell_size as f32).floor() as u32;
-    let mut board = Image::new_fill(
-        bevy::render::render_resource::Extent3d {
-            width: rows,
-            height: columns,
-            depth_or_array_layers: 1,
-        },
-        bevy::render::render_resource::TextureDimension::D2,
-        &(settings.dead_color.clone()),
-        TextureFormat::Rgba8Unorm,
-    );
+    let board_settings = create_board(&settings, &win);
+    let mut board = board_settings.0;
+    let rows = board_settings.1;
+    let columns = board_settings.2;
+
     // Seed the board
     seed(&mut board, &settings);
     // text setup
@@ -155,7 +146,6 @@ fn setup(
     commands.insert_resource(BoardHandle(image.clone()));
     commands.insert_resource(BoardSize { rows, columns });
     commands.insert_resource(Brush { size: 1 });
-    commands.insert_resource(LastUpdate(0.));
 
     commands.spawn(Camera2dBundle {
         camera_2d: Camera2d {
@@ -176,6 +166,21 @@ fn setup(
         })
         .insert(Board);
 }
+fn create_board(settings: &GameSettings, win: &Window) -> (Image, u32, u32) {
+    let rows = (win.width() / settings.cell_size as f32).floor() as u32;
+    let columns = (win.height() / settings.cell_size as f32).floor() as u32;
+    let board = Image::new_fill(
+        bevy::render::render_resource::Extent3d {
+            width: rows,
+            height: columns,
+            depth_or_array_layers: 1,
+        },
+        bevy::render::render_resource::TextureDimension::D2,
+        &(settings.dead_color.clone()),
+        TextureFormat::Rgba8Unorm,
+    );
+    (board, rows, columns)
+}
 
 // Updates the next_state of the cells and after all the cells have been updated, state=next_state
 fn process_cells(
@@ -189,7 +194,7 @@ fn process_cells(
 ) {
     // Check in the system since run conditions mess up with the scheduling
     let time_step = settings.time_step_secs;
-    if time.elapsed_seconds_f64() - (*previous_tick) <= time_step {
+    if time.elapsed_seconds_f64() - (*previous_tick) <= time_step as f64 {
         return ();
     }
     *previous_tick = time.elapsed_seconds_f64();
@@ -231,8 +236,13 @@ fn process_cells(
 fn handle_ui_events(
     mut ui_events: EventReader<UIEvent>,
     mut images: ResMut<Assets<Image>>,
-    board_handle: Res<BoardHandle>,
+    mut board_handle: ResMut<BoardHandle>,
     mut settings: ResMut<GameSettings>,
+
+    mut texture: Query<&mut Handle<Image>, With<Board>>, // The handle to the board's texture
+    mut commands: Commands,
+    q_win: Query<&Window>,
+    mut board_size: ResMut<BoardSize>,
 ) {
     for ev in ui_events.iter() {
         match *ev {
@@ -277,6 +287,27 @@ fn handle_ui_events(
                 reset_board(board, &settings);
                 seed(board, &settings);
             }
+            UIEvent::ChangeTimestep(time_step) => {
+                settings.time_step_secs = time_step;
+            }
+            UIEvent::ChangeCellSize(cell_size) => {
+                images.remove(&board_handle.0);
+                settings.cell_size = cell_size;
+                let window = q_win.single();
+                let mut new_board = create_board(&settings, &window);
+                seed(&mut new_board.0, &settings);
+                let image_handle = images.add(new_board.0);
+                let mut texture = texture.single_mut();
+
+                *texture = image_handle.clone();
+                *board_handle = BoardHandle(image_handle.clone());
+                *board_size = BoardSize {
+                    rows: new_board.1,
+                    columns: new_board.2,
+                };
+            }
+
+            _ => {}
         }
     }
 }
@@ -292,6 +323,7 @@ fn handle_events(
     board_handle: Res<BoardHandle>,
     mut exit: EventWriter<bevy::app::AppExit>,
     settings: Res<GameSettings>,
+    mut eguic: bevy_egui::EguiContexts,
 ) {
     // Resize the board sprite if the window's size has changed
     for resize in resize_events.iter() {
@@ -317,6 +349,12 @@ fn handle_events(
 
     // We'll add a living cell on the point where mouse was pressed
     if buttons.pressed(MouseButton::Left) {
+        let eguictx = eguic.ctx_mut();
+        // Skip the event if mouse is over UI element
+        if eguictx.is_pointer_over_area() {
+            return ();
+        }
+
         let win = q_win.single();
         if let Some(position) = win.cursor_position() {
             // X in the texture buffer
@@ -369,6 +407,28 @@ fn reset_board(board: &mut Image, settings: &GameSettings) {
 fn seed(board: &mut Image, settings: &GameSettings) {
     // match settings.seed
 
+    let gun_to_buff_values = |settings: &GameSettings, gun: &Vec<Vec<i32>>| {
+        let mut res: Vec<Vec<u8>> = vec![];
+        for i in 0..gun.len() {
+            let row = &gun[i];
+            let mut r = vec![];
+            for j in 0..row.len() {
+                if row[j] == 1 {
+                    r.push(settings.alive_color[0]);
+                    r.push(settings.alive_color[1]);
+                    r.push(settings.alive_color[2]);
+                    r.push(settings.alive_color[3]);
+                } else {
+                    r.push(settings.dead_color[0]);
+                    r.push(settings.dead_color[1]);
+                    r.push(settings.dead_color[2]);
+                    r.push(settings.dead_color[3]);
+                }
+            }
+            res.push(r);
+        }
+        return res;
+    };
     match settings.seed {
         Seed::Random => {
             let mut rng = rand::thread_rng();
@@ -398,28 +458,6 @@ fn seed(board: &mut Image, settings: &GameSettings) {
                 vec![0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
             ];
 
-            let gun_to_buff_values = |settings: &GameSettings, gun: &Vec<Vec<i32>>| {
-                let mut res: Vec<Vec<u8>> = vec![];
-                for i in 0..gun.len() {
-                    let row = &gun[i];
-                    let mut r = vec![];
-                    for j in 0..row.len() {
-                        if row[j] == 1 {
-                            r.push(settings.alive_color[0]);
-                            r.push(settings.alive_color[1]);
-                            r.push(settings.alive_color[2]);
-                            r.push(settings.alive_color[3]);
-                        } else {
-                            r.push(settings.dead_color[0]);
-                            r.push(settings.dead_color[1]);
-                            r.push(settings.dead_color[2]);
-                            r.push(settings.dead_color[3]);
-                        }
-                    }
-                    res.push(r);
-                }
-                return res;
-            };
             let board_size = board.size();
 
             let values = gun_to_buff_values(settings, &glider_gun);
@@ -450,6 +488,62 @@ fn seed(board: &mut Image, settings: &GameSettings) {
                 yy += 1;
             }
         }
+        Seed::SimkinGliderGun => {
+            #[rustfmt::skip]
+            let glider_gun = vec![
+                vec![1,1,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                vec![1,1,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                vec![0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                vec![0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                vec![0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                vec![0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                vec![0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                vec![0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                vec![0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                vec![0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,1,1,0,0,0,0,0,0],
+                vec![0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,1,0,0,0,0,0],
+                vec![0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,1,0,0,1,1],
+                vec![0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,0,0,0,1,0,0,0,1,1],
+                vec![0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0],
+                vec![0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                vec![0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                vec![0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                vec![0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                vec![0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,1,1,0,0,0,0,0],
+                vec![0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,1,0,0,0,0,0],
+            ];
+
+            let board_size = board.size();
+
+            let values = gun_to_buff_values(settings, &glider_gun);
+
+            #[rustfmt::skip]
+            let offset_y = if glider_gun.len() as f32 % 2. != 0. { 1 } else { 0 };
+            #[rustfmt::skip]
+            let offset_x = if glider_gun[0].len() as f32 % 2. != 0. { 1 } else { 0 };
+
+            let center = board_size / 2.;
+            let x_start = center.x as usize - glider_gun[0].len() / 2;
+            let x_end = (center.x as usize + glider_gun[0].len() / 2) + offset_x;
+            let y_start = center.y as usize - glider_gun.len() / 2;
+            let y_end = (center.y as usize + glider_gun.len() / 2) + offset_y;
+
+            let mut yy = 0;
+            let mut xx = 0;
+            for i in y_start..y_end {
+                for j in x_start..x_end {
+                    let offset = (i * board_size.x as usize * 4) + j * 4;
+                    board.data[offset + 0] = values[yy][xx + 0];
+                    board.data[offset + 1] = values[yy][xx + 1];
+                    board.data[offset + 2] = values[yy][xx + 2];
+                    board.data[offset + 3] = values[yy][xx + 3];
+                    xx += 4;
+                }
+                xx = 0;
+                yy += 1;
+            }
+        }
+
         _ => {}
     }
 }
